@@ -1,0 +1,16 @@
+from_leg_group_id,to_leg_group_id,transfer_count,duration_limit,duration_limit_type,fare_transfer_type
+MMME-L_1,MMME-L_1,-1,5400,0,0
+MMME-L_2,MMME-L_2,-1,14400,0,0
+MMME-L_3,MMME-L_3,-1,86400,0,0
+MMME-L_4,MMME-L_4,-1,86400,0,0
+MMME-L_5,MMME-L_5,-1,172800,0,0
+MMME-L_6,MMME-L_6,-1,259200,0,0
+MMME-L_7,MMME-L_7,-1,345600,0,0
+MMME-L_8,MMME-L_8,-1,604800,0,0
+leg:lio:lr,leg:lio:lr,-1,7200,1,0
+leg:lio:lr,leg:lio:lr:34,,7200,1,0
+leg:lio:lr,leg:lio:lr:66,,7200,1,0
+leg:lio:lr:34,leg:lio:lr,,7200,1,0
+leg:lio:lr:34,leg:lio:lr:34,-1,7200,1,0
+leg:lio:lr:66,leg:lio:lr,,7200,1,0
+leg:lio:lr:66,leg:lio:lr:66,-1,7200,1,0

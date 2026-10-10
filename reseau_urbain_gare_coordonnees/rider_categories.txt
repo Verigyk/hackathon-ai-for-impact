@@ -1,0 +1,4 @@
+rider_category_id,rider_category_name,is_default_fare_category,eligibility_url
+rider::TP,Tout public,1,https://www.lio-occitanie.fr/titres-et-tarifs/
+rider:lio:J26,Jeunes jusqu'à 26 ans,0,https://www.lio-occitanie.fr/titres-et-tarifs/
+rider:lio:J4,Enfants jusqu'à 4 ans,0,https://www.lio-occitanie.fr/titres-et-tarifs/

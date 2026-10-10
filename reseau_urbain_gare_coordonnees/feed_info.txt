@@ -1,0 +1,2 @@
+feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date,feed_version,feed_contact_email,feed_contact_url
+Occitanie,https://www.lio-occitanie.fr/,fr,20181203,20300131,10/10/2026-02:45,app-lio@laregion.fr,https://www.lio-occitanie.fr/contact-et-aide/

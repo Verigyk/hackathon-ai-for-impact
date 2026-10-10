@@ -1,0 +1,8 @@
+fare_media_id,fare_media_name,fare_media_type
+media::phy,Support papier,1
+media:lio:app:mticket,m-ticket,4
+media:lio:bsc:lio,Billet sans contact,2
+media:lio:cemv,Paiement sans contact,3
+media:lio:cnt,Comptage,0
+media:lio:csc:lio,Carte liO,2
+media:lio:csc:pastel,Carte Pastel,2
