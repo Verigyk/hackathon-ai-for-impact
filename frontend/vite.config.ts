@@ -10,6 +10,8 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    // Codespaces / dev cloud : l'URL publique du port est en *.app.github.dev.
+    allowedHosts: ['.app.github.dev'],
     proxy: {
       '/api': 'http://localhost:8000',
     },
