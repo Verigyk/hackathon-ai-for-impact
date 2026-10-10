@@ -32,6 +32,7 @@ from . import (comprendre, confiance, dossiers, expliquer, propositions, recomma
 from . import scene_textes as T
 from . import dates_proches as dates_mod
 from . import trajet_options
+from . import rag
 from . import themes as themes_mod
 from .texte import date_fr, duree_fr, heure_fr, normaliser
 
@@ -583,6 +584,11 @@ def _badges_destination(tour: Tour, plan: Plan) -> list[schemas.BadgeSource]:
             badges.append(_badge("chart", f"À l'heure {str(round(reg)).replace('.', ',')} %", src))
     if dest.niveau != "rouge":
         badges.append(_badge("shield", f"Indice {dest.indice_confiance}/100", "calcul"))
+    doc = rag.fiche(dest.site_id, dest.nom)
+    if doc is not None:
+        source = "catalogue" if doc.source == "catalogue" else "datatourisme"
+        libelle = "Fiche catalogue" if source == "catalogue" else "Fiche DATAtourisme"
+        badges.append(_badge("database", f"{libelle} : « {doc.passage[:140].rstrip()}… »", source))
     return badges
 
 

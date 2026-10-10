@@ -578,3 +578,21 @@ def rechercher(demande: str, centre: tuple[float, float] | None = None, rayon_km
         if len(docs) >= min(k, 3):
             break
     return docs
+
+
+def fiche(site_id: str, nom: str) -> Document | None:
+    """Fiche du corpus qui décrit un site déjà évalué (sans appel LLM) : catalogue d'abord, puis même nom."""
+    try:
+        entrees = corpus().entrees
+    except Exception:  # corpus absent ou illisible : pas de fiche, jamais d'erreur
+        return None
+    cible = f"catalogue:{site_id}"
+    nom_n = normaliser(nom)
+    par_nom = None
+    for e in entrees:
+        d = e.doc
+        if d.id == cible and d.passage:
+            return d
+        if par_nom is None and d.passage and normaliser(d.nom) == nom_n:
+            par_nom = d
+    return par_nom
