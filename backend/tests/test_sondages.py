@@ -52,7 +52,7 @@ def test_creation(client):
     assert [o["site_id"] for o in s["options"]] == ["saint-sernin", "cite-carcassonne", "chateau-foix"]
     assert s["options"][2] == {"site_id": "chateau-foix", "nom": "Château de Foix", "commune": "Toulouse",
                                "interet_pedagogique": "Découvrir Château de Foix.", "indice_confiance": 74,
-                               "niveau": "orange", "votes": 0}
+                               "niveau": "orange", "votes": 0, "votes_qr": 0, "votes_manuels": 0}
     lu = client.get(f"/api/sondages/{s['code'].lower()}")  # le code est insensible à la casse
     assert lu.status_code == 200 and lu.json() == s
 
@@ -164,3 +164,42 @@ def test_base_anterieure_sans_tables(base):
         with pytest.raises(HTTPException) as e:
             sondages.lire(conn, "ABCDEF")
         assert e.value.status_code == 404
+
+
+def manuels(client, code, v):
+    return client.post(f"/api/sondages/{code}/votes-manuels", json={"votes": v})
+
+
+def test_votes_manuels_s_additionnent_au_qr(client):
+    s = creer(client)
+    code = s["code"]
+    voter(client, code, "saint-sernin", "eleve-0001-aaaa")
+    r = manuels(client, code, {"saint-sernin": 10, "cite-carcassonne": 12})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    o = {x["site_id"]: x for x in j["options"]}
+    assert o["saint-sernin"]["votes"] == 11 and o["saint-sernin"]["votes_qr"] == 1
+    assert o["saint-sernin"]["votes_manuels"] == 10
+    assert j["votes_manuels"] == 22 and j["votes_qr"] == 1 and j["total_votes"] == 23
+    assert j["effectif"] == 42
+    # la saisie remplace la précédente
+    j = manuels(client, code, {"cite-carcassonne": 3}).json()
+    assert j["votes_manuels"] == 3 and j["total_votes"] == 4
+
+
+def test_votes_manuels_validation(client):
+    code = creer(client)["code"]
+    assert manuels(client, code, {"inconnu": 1}).status_code == 422
+    assert manuels(client, code, {"saint-sernin": -1}).status_code == 422
+    assert manuels(client, code, {"saint-sernin": 43}).status_code == 422   # > effectif (42)
+    voter(client, code, "saint-sernin", "eleve-0001-aaaa")
+    assert manuels(client, code, {"saint-sernin": 42}).status_code == 422   # 42 + 1 QR > 42
+    assert manuels(client, code, {"saint-sernin": 41}).status_code == 200
+    client.post(f"/api/sondages/{code}/fermer")
+    assert manuels(client, code, {"saint-sernin": 1}).status_code == 409
+
+
+def test_gagnant_avec_votes_manuels_egalite_confiance(client):
+    code = creer(client)["code"]
+    manuels(client, code, {"saint-sernin": 5, "cite-carcassonne": 5})
+    assert client.post(f"/api/sondages/{code}/fermer").json()["gagnant"] == "cite-carcassonne"  # indice 91 > 82

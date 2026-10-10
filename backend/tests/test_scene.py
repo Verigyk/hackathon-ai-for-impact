@@ -778,3 +778,122 @@ def test_mode_llm_utilise_les_crochets_et_les_garde_fous(client, monkeypatch):
     monkeypatch.setattr(scene_llm, "comprendre_texte", boum)
     r = client.post("/api/scene", json={"etat": j["etat"], "evenement": {"type": "texte", "texte": "merci"}})
     assert r.status_code == 200
+
+
+def test_selection_multiple_vote_manuel_puis_trajet(sc, client):
+    j = par_phrase(sc)
+    cands = [d["site_id"] for d in j["choix_destinations"]]
+    assert cands == j["etat"]["candidats"] and len(cands) >= 2
+    carte = j["carte"]
+    types = {p["type"] for p in carte["points"]}
+    assert {"depart", "arrivee", "destination"} <= types
+    assert len(carte["centre"]) == 2 and carte["traces"] and 4 <= carte["zoom"] <= 13
+    assert sum(1 for p in carte["points"] if p["type"] in ("destination", "candidate")) == len(cands)
+    j = sc.go({"type": "soumettre_vote", "ids": cands[:2]})
+    assert j["etape"] == "vote" and j["carte"] and j["etat"]["vote_code"]
+    code = j["etat"]["vote_code"]
+    s = client.get(f"/api/sondages/{code}").json()
+    assert [o["site_id"] for o in s["options"]] == cands[:2]
+    r = client.post(f"/api/sondages/{code}/votes-manuels", json={"votes": {cands[1]: 30, cands[0]: 12}})
+    assert r.status_code == 200 and r.json()["votes_manuels"] == 42
+    assert client.post(f"/api/sondages/{code}/votes-manuels", json={"votes": {cands[1]: 43}}).status_code == 422
+    g = client.post(f"/api/sondages/{code}/fermer").json()["gagnant"]
+    assert g == cands[1]
+    j = sc.go({"type": "vote_termine", "site_id": g})
+    assert j["etape"] == "trajet" and j["etat"]["site_id"] == g
+
+
+def test_selection_une_seule_passe_direct(sc):
+    j = par_phrase(sc)
+    j = sc.go({"type": "soumettre_vote", "ids": [j["etat"]["candidats"][0]]})
+    assert j["etape"] == "trajet" and j["etat"]["vote_code"] is None
+
+
+def test_selection_ids_invalides(sc):
+    par_phrase(sc)
+    assert sc.post({"type": "soumettre_vote", "ids": ["inconnu", "autre"]}).status_code == 409
+    assert sc.post({"type": "soumettre_vote", "ids": []}).status_code == 422
+    assert sc.post({"type": "soumettre_vote", "ids": list("abcde")}).status_code == 422
+
+
+# --- Trajet modifiable et dates proches (agent trajet) ---------------------------------------
+
+def _aller_au_trajet(client):
+    s = Scene(client)
+    s.demarrer()
+    s.texte(PHRASE)
+    return s, s.choix("choisir")
+
+
+def test_changer_aller_et_retour_et_retour_etape(client):
+    s, j = _aller_au_trajet(client)
+    assert j["etape"] == "trajet" and j["alternatives"]["aller"]
+    actuel = [o for o in j["alternatives"]["aller"] if o["actuel"]][0]
+    autres = [o for o in j["alternatives"]["aller"] if not o["actuel"]]
+    assert autres and all(o["places_disponibles"] <= 50 and o["niveau"] != "rouge" for o in j["alternatives"]["aller"])
+    j2 = s.choix("changer_aller:" + autres[0]["id"])
+    assert j2["etape"] == "trajet" and j2["proposition"]["aller"]["depart"] == autres[0]["depart"]
+    assert j2["proposition"]["aller"]["depart"] != actuel["depart"]
+    assert j2["proposition"]["retour"]["arrivee"] <= "19:00"
+    retours = [o for o in j2["alternatives"]["retour"] if not o["actuel"]]
+    for o in j2["alternatives"]["retour"]:
+        assert o["arrivee"] <= "19:00"
+    if retours:
+        j3 = s.choix("changer_retour:" + retours[0]["id"])
+        assert j3["proposition"]["retour"]["depart"] == retours[0]["depart"]
+    r = s.post({"type": "choix", "id": "changer_aller:999999"})
+    assert r.status_code == 409 and "faisable" in r.json()["detail"]
+    jr = s.choix("retour_etape")  # revient à la destination sans perdre l'état
+    assert jr["etape"] == "destination" and jr["etat"]["candidats"] and jr["etat"]["demande"]["date"] == "2026-11-12"
+    assert s.choix("choisir")["etape"] == "trajet"
+
+
+def test_changer_aller_hors_trajet_refuse(client):
+    s = Scene(client)
+    s.demarrer()
+    r = s.post({"type": "choix", "id": "changer_aller:871607"})
+    assert r.status_code == 409
+
+
+def test_date_sans_train_propose_les_dates_proches_puis_relance(client, monkeypatch):
+    from app.services import propositions
+    s = Scene(client)
+    s.demarrer()
+    s.texte(PHRASE)
+    orig = propositions.candidats_du_jour
+
+    def sans_train_le_12(conn, ctx, site, acces, jour):
+        res = orig(conn, ctx, site, acces, jour)
+        return ([], res[1], res[2]) if jour == "2026-11-12" else res
+
+    monkeypatch.setattr(propositions, "candidats_du_jour", sans_train_le_12)
+    r = s.post({"type": "choix", "id": "choisir"})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["etape"] == "trajet" and j["proposition"] is None
+    assert j["replique"] == "Pas de train fiable le 12 novembre, voici les dates les plus proches."
+    props = j["dates_proches"]
+    assert 2 <= len(props) <= 3 and all(p["date"] != "2026-11-12" for p in props)
+    assert any(p["ecart_jours"] < 0 for p in props) and any(p["ecart_jours"] > 0 for p in props)
+    assert all(abs(p["ecart_jours"]) <= 21 and p["date"] > "2026-10-10" for p in props)
+    cartes = [c for c in j["cartes"] if c["id"].startswith("choisir_date:")]
+    assert len(cartes) == len(props) and "nov." in cartes[0]["titre"] and " j)" in cartes[0]["titre"]
+    # une date hors liste est refusée
+    r = client.post("/api/scene", json={"etat": j["etat"], "evenement": {"type": "choix", "id": "choisir_date:2026-11-30"}})
+    assert r.status_code == 409
+    choisie = props[0]["date"]
+    r = client.post("/api/scene", json={"etat": j["etat"], "evenement": {"type": "choix", "id": cartes[0]["id"]}})
+    j2 = r.json()
+    assert r.status_code == 200 and j2["etat"]["demande"]["date"] == choisie
+    assert j2["proposition"]["date"] == choisie and j2["etape"] == "trajet"
+
+
+def test_endpoint_dates_proches(client):
+    r = client.post("/api/dates-proches", json={"date": "2026-11-15", "gare_depart": "Foix",
+                                                "gare_arrivee": "Toulouse Matabiau", "effectif": 46,
+                                                "heure_retour_max": "19:00"})
+    assert r.status_code == 200, r.text
+    props = r.json()["propositions"]
+    assert 1 <= len(props) <= 3 and all(p["date"] != "2026-11-15" for p in props)
+    assert client.post("/api/dates-proches", json={"date": "2026-11-15", "gare_depart": "Nulle part",
+                                                   "gare_arrivee": "Toulouse Matabiau", "effectif": 46}).status_code == 404

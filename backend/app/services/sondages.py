@@ -24,7 +24,7 @@ MIN_OPTIONS = 2
 MAX_OPTIONS = 4
 _VOTANT = re.compile(r"[A-Za-z0-9_-]{8,64}")
 
-_TABLES = ("sondage", "sondage_option", "sondage_vote")
+_TABLES = ("sondage", "sondage_option", "sondage_vote", "sondage_manuel", "sondage_effectif")
 _bases_pretes: set[str] = set()
 
 
@@ -34,7 +34,7 @@ def _assurer_schema(conn: sqlite3.Connection) -> None:
     if fichier in _bases_pretes:
         return
     presentes = {r["name"] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?)", _TABLES)}
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?, ?, ?)", _TABLES)}
     if len(presentes) < len(_TABLES):
         for instruction in db.SCHEMA_SONDAGES.split(";"):
             if instruction.strip():
@@ -86,7 +86,9 @@ def _lire(conn: sqlite3.Connection, code: str) -> schemas.Sondage:
         raise HTTPException(404, f"Aucun vote ne correspond au code {code or '(vide)'}. "
                                  "Vérifiez les 6 caractères affichés au tableau.")
     rows = conn.execute(
-        """SELECT o.*, COUNT(v.site_id) AS votes
+        """SELECT o.*, COUNT(v.site_id) AS votes_qr,
+                  COALESCE((SELECT m.nb FROM sondage_manuel m
+                            WHERE m.sondage_code = o.sondage_code AND m.site_id = o.site_id), 0) AS votes_manuels
            FROM sondage_option o
            LEFT JOIN sondage_vote v ON v.sondage_code = o.sondage_code AND v.site_id = o.site_id
            WHERE o.sondage_code = ?
@@ -97,10 +99,14 @@ def _lire(conn: sqlite3.Connection, code: str) -> schemas.Sondage:
     options = [schemas.OptionSondage(
         site_id=r["site_id"], nom=r["nom"], commune=r["commune"],
         interet_pedagogique=r["interet_pedagogique"], indice_confiance=r["indice_confiance"],
-        niveau=r["niveau"], votes=r["votes"]) for r in rows]
+        niveau=r["niveau"], votes=r["votes_qr"] + r["votes_manuels"], votes_qr=r["votes_qr"],
+        votes_manuels=r["votes_manuels"]) for r in rows]
+    eff = conn.execute("SELECT effectif FROM sondage_effectif WHERE sondage_code = ?", (code,)).fetchone()
     return schemas.Sondage(code=s["code"], titre=s["titre"], statut=s["statut"], options=options,
                            total_votes=sum(o.votes for o in options), gagnant=s["gagnant"],
-                           cree_le=s["cree_le"])
+                           cree_le=s["cree_le"], effectif=eff["effectif"] if eff else None,
+                           votes_qr=sum(o.votes_qr for o in options),
+                           votes_manuels=sum(o.votes_manuels for o in options))
 
 
 def creer(conn: sqlite3.Connection, req: schemas.RequeteSondage) -> schemas.Sondage:
@@ -122,6 +128,9 @@ def creer(conn: sqlite3.Connection, req: schemas.RequeteSondage) -> schemas.Sond
         [(code, i, d.site_id, d.nom, d.commune or "", d.interet_pedagogique or "", d.indice_confiance,
           d.niveau) for i, d in enumerate(retenues)],
     )
+    if req.demande.nb_eleves:
+        conn.execute("INSERT INTO sondage_effectif (sondage_code, effectif) VALUES (?, ?)",
+                     (code, req.demande.nb_eleves))
     return _lire(conn, code)
 
 
@@ -151,6 +160,34 @@ def voter(conn: sqlite3.Connection, code: str, req: schemas.RequeteVote) -> sche
              vote_le = excluded.vote_le""",
         (code, _empreinte(code, votant), req.site_id, db.maintenant_iso()),
     )
+    return _lire(conn, code)
+
+
+def votes_manuels(conn: sqlite3.Connection, code: str, req: schemas.RequeteVotesManuels) -> schemas.Sondage:
+    """Saisie à la main des votes (classes trop jeunes pour un téléphone) ; s'ajoute aux votes par QR.
+
+    La saisie REMPLACE la précédente. Le total (saisie + QR) ne peut pas dépasser l'effectif de la classe.
+    """
+    _assurer_schema(conn)
+    code = _normaliser_code(code)
+    sondage = _lire(conn, code)
+    if sondage.statut == "ferme":
+        raise HTTPException(409, "Le vote est terminé : la saisie des votes n'est plus possible.")
+    ids = {o.site_id for o in sondage.options}
+    inconnus = [k for k in req.votes if k not in ids]
+    if inconnus:
+        raise HTTPException(422, "Cette destination ne fait pas partie du vote.")
+    if any(n < 0 for n in req.votes.values()):
+        raise HTTPException(422, "Un nombre de votes ne peut pas être négatif.")
+    if sondage.effectif is not None and sum(req.votes.values()) + sondage.votes_qr > sondage.effectif:
+        raise HTTPException(
+            422, f"Trop de votes : la classe compte {sondage.effectif} élèves "
+                 f"({sondage.votes_qr} ont déjà voté par QR code).")
+    for sid in ids:
+        conn.execute(
+            """INSERT INTO sondage_manuel (sondage_code, site_id, nb) VALUES (?,?,?)
+               ON CONFLICT(sondage_code, site_id) DO UPDATE SET nb = excluded.nb""",
+            (code, sid, int(req.votes.get(sid, 0))))
     return _lire(conn, code)
 
 

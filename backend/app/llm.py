@@ -5,7 +5,8 @@ classe et justifie des sites DU CATALOGUE, et reformule une explication à parti
 fournis. Toute réponse est validée ; en cas d'erreur réseau, de refus ou de sortie invalide, le
 code retombe sur le mode démo (règles déterministes).
 
-Mode « llm » si ANTHROPIC_API_KEY est définie, sinon mode « demo ».
+Fournisseur choisi par l'environnement : GROQ_API_KEY (API compatible OpenAI, prioritaire), sinon
+ANTHROPIC_API_KEY, sinon mode « demo ». Aucune clé n'est jamais écrite dans un fichier.
 """
 from __future__ import annotations
 
@@ -32,8 +33,55 @@ T = TypeVar("T", bound=BaseModel)
 _client = None
 
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODELE_GROQ_DEFAUT = "llama-3.3-70b-versatile"
+DELAI_GROQ_S = 6.0
+_transport_groq = None  # injectable (tests) : httpx.BaseTransport
+
+
+def fournisseur() -> str:
+    """« groq », « anthropic » ou « demo » selon les clés présentes dans l'environnement."""
+    if os.environ.get("GROQ_API_KEY"):
+        return "groq"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return "demo"
+
+
 def mode() -> str:
-    return "llm" if os.environ.get("ANTHROPIC_API_KEY") else "demo"
+    return "llm" if fournisseur() != "demo" else "demo"
+
+
+def _appel_groq(systeme: str, contenu: str, format_sortie: type[T], max_tokens: int,
+                delai: float = DELAI_GROQ_S) -> T | None:
+    """Un seul essai, JSON validé par Pydantic. None sur toute erreur (journal sans contenu brut)."""
+    try:
+        import httpx
+
+        schema = json.dumps(format_sortie.model_json_schema(), ensure_ascii=False)
+        corps = {
+            "model": os.environ.get("LLM_MODEL") or MODELE_GROQ_DEFAUT,
+            "messages": [
+                {"role": "system", "content": f"{systeme}\n\nRéponds uniquement par un objet JSON "
+                                              f"valide conforme à ce schéma JSON :\n{schema}"},
+                {"role": "user", "content": contenu},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+        }
+        with httpx.Client(timeout=delai, transport=_transport_groq) as c:
+            r = c.post(GROQ_URL, json=corps,
+                       headers={"Authorization": f"Bearer {os.environ.get('GROQ_API_KEY', '')}"})
+        r.raise_for_status()
+        choix = r.json()["choices"][0]
+        if choix.get("finish_reason") == "length":
+            log.warning("Groq : réponse tronquée, repli démo.")
+            return None
+        return format_sortie.model_validate_json(choix["message"]["content"])
+    except Exception as e:  # réseau, délai, HTTP, JSON ou schéma invalides
+        log.warning("Groq indisponible ou réponse inutilisable (%s), repli démo.", type(e).__name__)
+        return None
 
 
 def _get_client():
@@ -51,6 +99,8 @@ def _appeler(systeme: str, contenu: str, format_sortie: type[T], max_tokens: int
     if mode() != "llm" or _tour_scene.get() is not None:
         # Pendant un tour de scène, seuls les 2 appels rapides de la scène sont permis.
         return None
+    if fournisseur() == "groq":
+        return _appel_groq(systeme, contenu, format_sortie, max_tokens, delai=DELAI_GROQ_S)
     try:
         import anthropic
     except ImportError:
@@ -122,11 +172,19 @@ def appel_scene(etiquette: str, systeme: str, contenu: str, format_sortie: type[
     if bilan is not None and bilan["appels"] >= MAX_APPELS_PAR_TOUR:
         log.info("Scène : quota de %d appels atteint, « %s » ignoré.", MAX_APPELS_PAR_TOUR, etiquette)
         return None
+    debut = time.monotonic()
+    if fournisseur() == "groq":
+        if bilan is not None:
+            bilan["appels"] += 1
+        try:
+            return _appel_groq(systeme, contenu, format_sortie, max_tokens)
+        finally:
+            if bilan is not None:
+                bilan["ms"] += int((time.monotonic() - debut) * 1000)
     try:
         import anthropic
     except ImportError:
         return None
-    debut = time.monotonic()
     if bilan is not None:
         bilan["appels"] += 1
     try:
@@ -170,6 +228,16 @@ def appel_scene(etiquette: str, systeme: str, contenu: str, format_sortie: type[
         log.warning("Scène/%s : réponse tronquée, repli démo.", etiquette)
         return None
     return getattr(reponse, "parsed_output", None)
+
+
+def appel_json(etiquette: str, systeme: str, contenu: str, format_sortie: type[T],
+               max_tokens: int = 800) -> T | None:
+    """Un appel structuré rapide hors scène (ex. reformulation RAG) : 1 essai, délai court, None si échec."""
+    if mode() != "llm":
+        return None
+    if fournisseur() == "groq":
+        return _appel_groq(systeme, contenu, format_sortie, max_tokens)
+    return appel_scene(etiquette, systeme, contenu, format_sortie, max_tokens)
 
 
 def _compter_jetons(etiquette: str, reponse, ms: int, bilan: dict | None) -> None:

@@ -186,7 +186,8 @@ type EvenementScene =
   | { type: "valeur"; champ: "effectif" | "date" | "lieu_depart"; valeur: Record<string, string | number> }
   | { type: "retour" }                                     // revenir à l'étape précédente
   | { type: "vote_termine"; site_id: string }              // la classe a voté (le front a clos le sondage)
-  | { type: "prereservation_faite"; reference: string };   // le front a appelé POST /api/pre-reservations
+  | { type: "prereservation_faite"; reference: string }    // le front a appelé POST /api/pre-reservations
+  | { type: "soumettre_vote"; ids: string[] };             // étape destination : 1 id = choix direct (→ trajet), 2 à 4 = vote de la classe
 
 // Icônes : jeu FERMÉ de clés, le front les associe à des icônes lucide-react.
 type IconeScene = "chateau" | "os" | "colonnes" | "planete" | "feuille" | "palette" | "ampoule" | "pin"
@@ -234,7 +235,12 @@ interface ReponseScene {
   proposition: Proposition | null;   // renseignée aux étapes trajet / vote / prereservation
   detail: DetailScene | null;        // renseigné après le choix « pourquoi »
   mode: "llm" | "demo";
+  choix_destinations: Destination[]; // étape destination : les candidates à cocher (dans l'ordre de etat.candidats), sinon []
+  carte: CarteGeo | null;            // étapes destination et vote (null si coordonnées manquantes)
 }
+
+interface PointCarte { lat: number; lon: number; libelle: string; type: "depart" | "arrivee" | "destination" | "candidate"; numero?: number; actif: boolean }
+interface CarteGeo { centre: [number, number]; zoom: number; points: PointCarte[]; traces: [number, number][][] } // traces[0] = marche gare → site actif
 ```
 
 | Route | Corps | Réponse | Rôle |
@@ -249,4 +255,12 @@ interface ReponseScene {
 - Toute destination issue de DATAtourisme a un `site_id` préfixé `dt-` ; le front affiche alors l'étiquette « Découverte » (info à vérifier auprès du site).
 - Un événement impossible pour l'étape courante renvoie 409 `{detail}` en français.
 
-**Vote** : quand l'enseignant choisit « Faire voter la classe » (carte `vote`), le **back crée le sondage** (service `sondages`, avec les candidats de l'état) et renseigne `etat.vote_code`. Le front affiche alors QR code et course avec les routes « Vote en classe » existantes (`GET /api/sondages/{code}`), clôt avec `POST /api/sondages/{code}/fermer`, puis envoie `vote_termine` avec le `site_id` gagnant : la scène enchaîne sur le trajet de cette destination. **Pré-réservation** : le front appelle `POST /api/pre-reservations`, puis envoie `prereservation_faite`.
+**Vote** : quand l'enseignant choisit « Faire voter la classe » (carte `vote`), le **back crée le sondage** (service `sondages`, avec les candidats de l'état) et renseigne `etat.vote_code`. Le front affiche alors QR code et course avec les routes « Vote en classe » existantes (`GET /api/sondages/{code}`), clôt avec `POST /api/sondages/{code}/fermer`, puis envoie `vote_termine` avec le `site_id` gagnant : la scène enchaîne sur le trajet de cette destination. **Sélection multiple** : à l'étape destination, l'enseignant coche 1 à 4 candidates (parmi `etat.candidats`) et envoie `soumettre_vote {ids}`. 1 id : même effet que « Celle-ci ! » (étape trajet). 2 à 4 ids : le back crée le sondage limité à ces destinations (`etat.vote_code`, étape vote). Un id hors candidates → 409. **Saisie manuelle** (classes trop jeunes pour un téléphone) : `POST /api/sondages/{code}/votes-manuels {votes: {site_id: n}}` remplace la saisie précédente ; refus 422 si site inconnu, nombre négatif, ou saisie + votes QR > effectif de la classe ; 409 si le vote est clos. `Sondage` et `OptionSondage` exposent `votes` (total), `votes_qr`, `votes_manuels` ; `Sondage.effectif`. Égalité : l'indice de confiance départage. **Pré-réservation** : le front appelle `POST /api/pre-reservations`, puis envoie `prereservation_faite`.
+
+## Trajet modifiable et dates proches (ajout)
+
+`ReponseScene` gagne deux champs : `alternatives` (étape `trajet`, `{aller: OptionHoraire[], retour: OptionHoraire[]}`, 2 à 5 circulations faisables par sens, calculées par le serveur avec les mêmes contrôles R1–R10 ; chaque option : `id` (numéros de train joints par `+`), `depart`, `arrivee`, `duree_min`, `correspondances`, `places_disponibles` (≤ 50, options comprises), `besoin`, `niveau`, `score`, `actuel`) et `dates_proches` (`DateProche[]`, vide sauf si aucun train à la date demandée).
+
+Nouveaux événements `{type:"choix", id}` à l'étape `trajet` : `changer_aller:<id>`, `changer_retour:<id>` (l'id doit appartenir aux options renvoyées, sinon 409 ; le retour respecte `heure_retour_max`), `retour_etape` (= `retour`, l'état est conservé), `choisir_date:AAAA-MM-JJ` (la date doit figurer dans `dates_proches`, sinon 409 ; relance le parcours avec cette date).
+
+`POST /api/dates-proches` : `{date, gare_depart (UIC ou nom), site_id | gare_arrivee, effectif, heure_retour_max?, heure_depart_min?}` -> `{date_demandee, propositions: [{date, ecart_jours (signé), aller, retour, niveau, score}]}` (2 à 3 dates, fenêtre ±21 jours, jours ouvrés hors fériés fixes, jamais dans le passé).

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { CircleX, Lock, RotateCw, Smartphone, Trophy, Users, Vote, Wifi, WifiOff } from 'lucide-react'
+import { CheckCircle2, CircleX, ClipboardList, Lock, Minus, Plus, RotateCw, Smartphone, Trophy, Users, Vote, Wifi, WifiOff } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Sondage } from '../../api/types'
 import type { PropsPanneau } from '../types'
@@ -227,12 +227,25 @@ function VoteOuvert({ code, envoyer, chargement, commenter }: VoteOuvertProps) {
           </section>
         )}
 
-        <div className="flex items-center gap-2 border-t-2 border-dashed border-base-300 pt-4 text-sm">
-          <Users className="size-4 shrink-0" aria-hidden="true" />
-          <p aria-live="polite" className="tabular-nums">
-            <span className="font-extrabold">{total}</span> {total > 1 ? 'votes reçus' : 'vote reçu'}
+        <div className="grid gap-1.5 border-t-2 border-dashed border-base-300 pt-4 text-sm">
+          <p aria-live="polite" className="flex items-center gap-2 tabular-nums">
+            <Users className="size-4 shrink-0" aria-hidden="true" />
+            <span>
+              <span className="font-extrabold">{total}</span> {total > 1 ? 'votes reçus' : 'vote reçu'}
+              {sondage.effectif ? ` sur ${sondage.effectif} élèves` : ''}
+            </span>
+          </p>
+          <p className="flex items-center gap-2 tabular-nums">
+            <ClipboardList className="size-4 shrink-0" aria-hidden="true" />
+            {sondage.votes_manuels} {sondage.votes_manuels > 1 ? 'votes' : 'vote'} en classe (saisie)
+          </p>
+          <p className="flex items-center gap-2 tabular-nums">
+            <Smartphone className="size-4 shrink-0" aria-hidden="true" />
+            {sondage.votes_qr} {sondage.votes_qr > 1 ? 'votes' : 'vote'} par QR
           </p>
         </div>
+
+        {!ferme && <SaisieManuelle code={code} sondage={sondage} onSondage={remplacer} />}
 
         <div className="min-w-0 max-sm:[&_.font-extrabold.text-xl]:text-base">
           <CourseTrains sondage={sondage} />
@@ -372,6 +385,128 @@ function Celebration({ nom, commune, votes, enchaine, occupe, peutContinuer, onC
           {occupe && <span className="loading loading-spinner loading-sm" aria-hidden="true" />}
           {enchaine ? 'Voir le trajet maintenant' : 'Voir le trajet'}
         </button>
+      )}
+    </section>
+  )
+}
+
+interface SaisieManuelleProps {
+  code: string
+  sondage: Sondage
+  onSondage: (s: Sondage) => void
+}
+
+/** Saisie à la main des votes (classes trop jeunes pour un téléphone) ; s'ajoute aux votes par QR. */
+function SaisieManuelle({ code, sondage, onSondage }: SaisieManuelleProps) {
+  const id = useId()
+  const [ouverte, setOuverte] = useState(sondage.votes_manuels > 0)
+  const [valeurs, setValeurs] = useState<Record<string, number>>(() =>
+    Object.fromEntries(sondage.options.map((o) => [o.site_id, o.votes_manuels])),
+  )
+  const [enregistrement, setEnregistrement] = useState(false)
+  const [erreur, setErreur] = useState<string | null>(null)
+  const [ok, setOk] = useState(false)
+
+  const somme = Object.values(valeurs).reduce((a, b) => a + b, 0)
+  const plafond = sondage.effectif ?? 50
+  const reste = plafond - sondage.votes_qr - somme
+  const depasse = reste < 0
+
+  function changer(siteId: string, delta: number) {
+    setOk(false)
+    setValeurs((v) => ({ ...v, [siteId]: Math.max(0, (v[siteId] ?? 0) + delta) }))
+  }
+
+  async function enregistrer() {
+    setEnregistrement(true)
+    setErreur(null)
+    try {
+      onSondage(await api.votesManuels(code, valeurs))
+      setOk(true)
+    } catch (cause) {
+      setErreur(cause instanceof Error ? cause.message : 'La saisie n’a pas pu être enregistrée.')
+    } finally {
+      setEnregistrement(false)
+    }
+  }
+
+  if (!ouverte) {
+    return (
+      <button type="button" onClick={() => setOuverte(true)} className="btn btn-outline btn-md min-h-11 w-full sm:w-fit">
+        <ClipboardList className="size-4" aria-hidden="true" />
+        Saisir les votes à la main
+      </button>
+    )
+  }
+
+  return (
+    <section aria-labelledby={`${id}-titre`} className="grid gap-3 rounded-box border-2 border-base-300 p-3">
+      <h3 id={`${id}-titre`} className="flex items-center gap-2 font-bold">
+        <ClipboardList className="size-5 shrink-0" aria-hidden="true" />
+        Votes à main levée
+      </h3>
+      <p className="text-xs">
+        Pour les classes sans téléphone : comptez les mains levées. S’ajoute aux votes par QR code.
+      </p>
+      <ul className="grid gap-2">
+        {sondage.options.map((o) => (
+          <li key={o.site_id} className="flex items-center justify-between gap-3">
+            <span className="min-w-0 truncate text-sm font-semibold">{o.nom}</span>
+            <span className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => changer(o.site_id, -1)}
+                disabled={(valeurs[o.site_id] ?? 0) <= 0}
+                aria-label={`Un vote de moins pour ${o.nom}`}
+                className="btn btn-square btn-outline min-h-11 min-w-11"
+              >
+                <Minus className="size-4" aria-hidden="true" />
+              </button>
+              <output className="w-10 text-center text-lg font-extrabold tabular-nums" aria-label={`${valeurs[o.site_id] ?? 0} votes pour ${o.nom}`}>
+                {valeurs[o.site_id] ?? 0}
+              </output>
+              <button
+                type="button"
+                onClick={() => changer(o.site_id, 1)}
+                disabled={reste <= 0}
+                aria-label={`Un vote de plus pour ${o.nom}`}
+                className="btn btn-square btn-outline min-h-11 min-w-11"
+              >
+                <Plus className="size-4" aria-hidden="true" />
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className={`flex items-center gap-2 text-sm tabular-nums ${depasse ? 'font-bold text-error' : ''}`} aria-live="polite">
+        {depasse ? <CircleX className="size-4 shrink-0" aria-hidden="true" /> : <Users className="size-4 shrink-0" aria-hidden="true" />}
+        {somme} en classe + {sondage.votes_qr} par QR sur {plafond} élèves
+        {depasse ? ' : trop de votes' : ` · ${reste} restant${reste > 1 ? 's' : ''}`}
+      </p>
+      <button
+        type="button"
+        onClick={() => void enregistrer()}
+        disabled={enregistrement || depasse}
+        className="btn btn-primary btn-md min-h-11 w-full sm:w-fit"
+      >
+        {enregistrement ? (
+          <span className="loading loading-spinner loading-sm" aria-hidden="true" />
+        ) : (
+          <CheckCircle2 className="size-4" aria-hidden="true" />
+        )}
+        Enregistrer la saisie
+      </button>
+      {ok && (
+        <p role="status" className="flex items-center gap-2 text-sm font-semibold">
+          <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" />
+          Saisie enregistrée
+        </p>
+      )}
+      {erreur && (
+        <p role="alert" className="flex items-start gap-2 text-sm font-semibold text-error">
+          <CircleX className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          {erreur}
+        </p>
       )}
     </section>
   )

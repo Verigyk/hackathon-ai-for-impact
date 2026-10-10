@@ -30,6 +30,8 @@ from .. import config, db, llm, schemas
 from . import (comprendre, confiance, dossiers, expliquer, propositions, recommander, scene_llm,
                sites, sondages, trains)
 from . import scene_textes as T
+from . import dates_proches as dates_mod
+from . import trajet_options
 from . import themes as themes_mod
 from .texte import date_fr, duree_fr, heure_fr, normaliser
 
@@ -115,6 +117,7 @@ class Sortie:
     proposition: schemas.Proposition | None = None
     detail: schemas.DetailScene | None = None
     faits: dict = field(default_factory=dict)
+    dates_proches: list = field(default_factory=list)
 
 
 @dataclass
@@ -192,6 +195,8 @@ def _jouer(conn: sqlite3.Connection, req: schemas.RequeteScene) -> schemas.Repon
         sortie = _on_retour(tour)
     elif ev.type == "vote_termine":
         sortie = _on_vote_termine(tour, ev.site_id)
+    elif ev.type == "soumettre_vote":
+        sortie = _on_soumettre_vote(tour, ev.ids)
     else:
         sortie = _on_prereservation_faite(tour, ev.reference)
     return _finaliser(tour, sortie)
@@ -255,7 +260,8 @@ def _finaliser(tour: Tour, s: Sortie) -> schemas.ReponseScene:
         etat=etat, etape=etat.etape, replique=replique, humeur=s.humeur,
         ancre=s.ancre or ANCRES[etat.etape], cartes=cartes, saisie=s.saisie, badges=s.badges[:4],
         puces=_puces(etat), manquants=_manquants(etat), destination=s.destination,
-        proposition=s.proposition, detail=s.detail, mode=tour.mode)
+        proposition=s.proposition, detail=s.detail, mode=tour.mode, **_extras_destination(tour, s),
+        alternatives=_alternatives(tour, s), dates_proches=s.dates_proches)
 
 
 _MOTS_INTERDITS = re.compile(r"\b(r[ée]serv[ée]e?s?|confirm[ée]e?s?)\b", re.IGNORECASE)
@@ -744,6 +750,10 @@ def _presenter_trajet(tour: Tour, plan: Plan, p: schemas.Proposition | None, mod
     etat.etape = "trajet"
     etat.site_id = plan.dest.site_id
     choix = plan.choix
+    if mode == "choisi" and p is None and choix.genre == "aucun":
+        proposees = _vue_dates_proches(tour, plan)
+        if proposees is not None:
+            return proposees
     if p is None:
         etat.proposition_id = None
         etat.etape = "destination"
@@ -1045,6 +1055,9 @@ def _router(tour: Tour, bilan: Bilan | None = None, ack: str | None = None,
 def _on_choix(tour: Tour, id_: str) -> Sortie:
     etat, e = tour.etat, tour.etat.etape
     tour.carnet_ens = _titre_carte(tour, id_)
+    nouveau = _on_choix_trajet_modifiable(tour, id_)
+    if nouveau is not None:
+        return nouveau
 
     def inconnu():
         raise HTTPException(409, f"La carte « {id_} » n'existe pas à l'étape « {e} ».")
@@ -1591,3 +1604,178 @@ def _question_ou_phrase(texte: str, norm: str) -> bool:
     if "?" in texte or _RE_INTERROGATIF.match(norm):
         return not comprendre.geo.commune_dans_texte(norm) or "?" in texte
     return len(norm.split()) > 8
+
+
+# --- Sélection multiple de destinations, vote sur les candidates et carte -------------------
+# (bloc ajouté : multi-sélection + vote ; le reste de la machine à états est inchangé)
+
+def _on_soumettre_vote(tour: Tour, ids: list[str]) -> Sortie:
+    """1 destination cochée : choix direct. 2 à 4 : sondage de classe limité à ces candidates."""
+    etat = tour.etat
+    if etat.etape != "destination":
+        raise HTTPException(409, "On ne peut soumettre des destinations au vote qu'à l'étape « destination » "
+                                 f"(étape actuelle : « {etat.etape} »).")
+    uniques = list(dict.fromkeys(ids))
+    if not 1 <= len(uniques) <= 4:
+        raise HTTPException(409, "Choisissez entre 1 et 4 destinations.")
+    hors = [i for i in uniques if i not in etat.candidats]
+    if hors:
+        raise HTTPException(409, "Cette destination ne fait pas partie des candidates proposées.")
+    noms = []
+    for sid in uniques:
+        site = sites.charger_site(tour.conn, sid)
+        noms.append(site["nom"] if site else sid)
+    tour.carnet_ens = "Destinations soumises : " + ", ".join(noms)
+    if len(uniques) == 1:
+        etat.rang = etat.candidats.index(uniques[0])
+        etat.site_id = uniques[0]
+        plan = _plan(tour, etat.site_id)
+        return _presenter_trajet(tour, plan, plan.choix.ref)
+    destinations = [_plan(tour, sid).dest for sid in uniques]
+    sondage = sondages.creer(tour.conn, schemas.RequeteSondage(demande=etat.demande, destinations=destinations))
+    etat.vote_code = sondage.code
+    etat.rang = etat.candidats.index(uniques[0])
+    etat.etape = "vote"
+    return Sortie(f"Voici le vote : {len(uniques)} destinations en lice. Les élèves scannent, ou vous saisissez "
+                  "les votes à la main.", "parle", "droite",
+                  [_carte("retour", "Annuler le vote", "Revenir aux destinations", "retour", "neutre")],
+                  None, [], destinations[0], None, None,
+                  {"vote": sondage.code, "options": len(sondage.options)})
+
+
+def _zoom_pour(points: list[tuple[float, float]]) -> int:
+    import math
+    lats, lons = [p[0] for p in points], [p[1] for p in points]
+    etendue = max(max(lats) - min(lats), (max(lons) - min(lons)) * math.cos(math.radians(sum(lats) / len(lats))), 0.01)
+    return max(4, min(13, int(math.log2(360 / (etendue * 1.5)))))
+
+
+def _carte_destinations(tour: Tour, actif: str | None, dests: list[schemas.Destination]) -> schemas.CarteGeo | None:
+    """Carte : gare de départ, candidates numérotées, destination active, gare d'arrivée, marche gare -> site."""
+    d = tour.etat.demande
+    pts: list[schemas.PointCarte] = []
+    traces: list[list[list[float]]] = []
+    if d.gare_depart is not None and d.gare_depart.lat and d.gare_depart.lon:
+        pts.append(schemas.PointCarte(lat=d.gare_depart.lat, lon=d.gare_depart.lon,
+                                      libelle=f"Départ : {d.gare_depart.nom}", type="depart"))
+    for i, dest in enumerate(dests):
+        site = sites.charger_site(tour.conn, dest.site_id)
+        if site is None or not site["lat"] or not site["lon"]:
+            continue
+        est_actif = dest.site_id == actif
+        marche = dest.acces_gare_site
+        lib = dest.nom
+        if est_actif:
+            lib += f" · {marche.minutes_groupe} min {'à pied' if marche.mode == 'pied' else 'en transport urbain'}"
+        pts.append(schemas.PointCarte(lat=site["lat"], lon=site["lon"], libelle=lib,
+                                      type="destination" if est_actif else "candidate",
+                                      numero=i + 1, actif=est_actif))
+        if est_actif and dest.gare.lat and dest.gare.lon:
+            pts.append(schemas.PointCarte(lat=dest.gare.lat, lon=dest.gare.lon,
+                                          libelle=f"Arrivée : {dest.gare.nom}", type="arrivee"))
+            traces.append([[dest.gare.lat, dest.gare.lon], [site["lat"], site["lon"]]])
+    if len(pts) < 2:
+        return None
+    coords = [(p.lat, p.lon) for p in pts]
+    centre = [sum(c[0] for c in coords) / len(coords), sum(c[1] for c in coords) / len(coords)]
+    return schemas.CarteGeo(centre=centre, zoom=_zoom_pour(coords), points=pts, traces=traces)
+
+
+def _extras_destination(tour: Tour, s: Sortie) -> dict:
+    """Champs optionnels de la réponse : candidates à cocher (étape destination) et carte (destination, vote)."""
+    etat = tour.etat
+    if etat.etape not in ("destination", "vote") or not etat.candidats:
+        return {}
+    try:
+        dests = [_plan(tour, sid).dest for sid in etat.candidats]
+        actif = s.destination.site_id if s.destination else None
+        carte = _carte_destinations(tour, actif, dests)
+    except HTTPException:
+        return {}
+    return {"choix_destinations": dests if etat.etape == "destination" else [], "carte": carte}
+
+
+# --- Trajet modifiable, dates proches (ajout) -------------------------------------------------
+
+JOURS_CAP = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+
+
+def _libelle_date(iso: str, ecart: int) -> str:
+    d = date.fromisoformat(iso)
+    return f"{JOURS_CAP[d.weekday()]} {T.date_puce(d)} ({ecart:+d} j)".replace("-", "−")
+
+
+def _dates_proches(tour: Tour, plan: Plan) -> list[schemas.DateProche]:
+    return dates_mod.chercher(tour.conn, tour.etat.demande, plan.site, tour.etat.demande.date, tour.aujourdhui)
+
+
+def _vue_dates_proches(tour: Tour, plan: Plan) -> Sortie | None:
+    """Aucun trajet fiable à la date demandée : Tchouette propose les dates faisables les plus proches."""
+    etat = tour.etat
+    props = _dates_proches(tour, plan)
+    if not props:
+        return None
+    etat.etape = "trajet"
+    etat.site_id = plan.dest.site_id
+    etat.proposition_id = None
+    jour = date_fr(etat.demande.date, False).rsplit(" ", 1)[0]
+    cartes = [_carte(f"choisir_date:{x.date}", _libelle_date(x.date, x.ecart_jours),
+                     f"Départ {heure_fr(x.aller.depart)}, retour {heure_fr(x.retour.arrivee)}", "calendrier",
+                     "primaire" if i == 0 else "neutre") for i, x in enumerate(props)]
+    cartes.append(_carte("retour_etape", "Étape précédente", "Revenir à la destination", "retour", "neutre"))
+    return Sortie(f"Pas de train fiable le {jour}, voici les dates les plus proches.", "inquiete", None,
+                  cartes[:4], None, [], plan.dest, None, None,
+                  {"destination": plan.dest.nom}, props)
+
+
+def _alternatives(tour: Tour, s: Sortie) -> schemas.AlternativesTrajet | None:
+    etat = tour.etat
+    if etat.etape != "trajet" or s.proposition is None or not etat.site_id:
+        return None
+    site = sites.charger_site(tour.conn, etat.site_id)
+    if site is None:
+        return None
+    return trajet_options.vers_schema(trajet_options.calculer(tour.conn, etat.demande, site, s.proposition))
+
+
+def _on_choix_trajet_modifiable(tour: Tour, id_: str) -> Sortie | None:
+    """Actions nouvelles de l'étape trajet : changer_aller:<id>, changer_retour:<id>, retour_etape,
+    choisir_date:<AAAA-MM-JJ>. Renvoie None pour toute autre carte."""
+    etat = tour.etat
+    sens = "aller" if id_.startswith("changer_aller:") else "retour" if id_.startswith("changer_retour:") else None
+    if id_ != "retour_etape" and sens is None and not id_.startswith("choisir_date:"):
+        return None
+    if etat.etape != "trajet":
+        raise HTTPException(409, f"La carte « {id_} » n'existe pas à l'étape « {etat.etape} ».")
+    if id_ == "retour_etape":
+        tour.carnet_ens = "Revenir à l'étape précédente"
+        return _on_retour(tour)
+    if id_.startswith("choisir_date:"):
+        iso = id_.split(":", 1)[1]
+        plan = _plan(tour, etat.site_id)
+        choisie = next((x for x in _dates_proches(tour, plan) if x.date == iso), None)
+        if choisie is None:
+            raise HTTPException(409, "Cette date ne fait pas partie des dates proposées : "
+                                     "choisissez l'une des cartes affichées.")
+        tour.carnet_ens = _libelle_date(iso, choisie.ecart_jours)
+        etat.demande = etat.demande.model_copy(update={"date": iso})
+        plan = _plan(tour, etat.site_id)
+        s = _presenter_trajet(tour, plan, plan.choix.ref)
+        return replace(s, replique=_assembler(
+            (f"Je relance avec le {T.date_courte(date.fromisoformat(iso))}.", False), (s.replique, True)))
+    stocke = _proposition_stockee(tour)
+    site = sites.charger_site(tour.conn, etat.site_id) if etat.site_id else None
+    if stocke is None or site is None:
+        raise HTTPException(409, "Aucun trajet n'est présenté : choisissez d'abord une destination.")
+    ident = id_.split(":", 1)[1]
+    nouvelle = trajet_options.appliquer(tour.conn, etat.demande, site, stocke[0], sens, ident)
+    if nouvelle is None:
+        raise HTTPException(409, f"Cet horaire {'d' + chr(39) + 'aller' if sens == 'aller' else 'de retour'} n'est pas faisable pour votre groupe : "
+                                 "choisissez l'un des horaires proposés.")
+    dossiers.stocker(tour.conn, [nouvelle], stocke[1], etat.demande.model_copy(update={"date": nouvelle.date}))
+    etat.proposition_id = nouvelle.proposition_id
+    tour.carnet_ens = "Autre horaire d'aller" if sens == "aller" else "Autre horaire de retour"
+    s = _vue_trajet(tour)
+    quoi = (f"aller à {heure_fr(nouvelle.aller.depart)}" if sens == "aller"
+            else f"retour à {heure_fr(nouvelle.retour.depart)}")
+    return replace(s, replique=_assembler((f"C'est noté : {quoi}.", False), (s.replique, True)))

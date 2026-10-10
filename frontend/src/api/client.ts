@@ -91,6 +91,9 @@ export const api = {
   voter: (code: string, siteId: string, votantId: string) =>
     poster<Sondage>(`/sondages/${encodeURIComponent(code)}/votes`, { site_id: siteId, votant_id: votantId }),
 
+  votesManuels: (code: string, votes: Record<string, number>) =>
+    poster<Sondage>(`/sondages/${encodeURIComponent(code)}/votes-manuels`, { votes }),
+
   fermerSondage: (code: string) => poster<Sondage>(`/sondages/${encodeURIComponent(code)}/fermer`, {}),
 
   reseau: () => appeler<Reseau>('/reseau'),

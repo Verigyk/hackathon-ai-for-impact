@@ -1,7 +1,18 @@
 import { useId } from 'react'
-import { CalendarClock, Hourglass, TriangleAlert, Users } from 'lucide-react'
-import type { Controle, CritereIndice, Jauge } from '../../api/types'
+import {
+  ArrowLeftRight,
+  CalendarClock,
+  CalendarSearch,
+  CheckCircle2,
+  Clock,
+  Hourglass,
+  Train,
+  TriangleAlert,
+  Users,
+} from 'lucide-react'
+import type { Controle, CritereIndice, DateProche, Jauge, OptionHoraire } from '../../api/types'
 import type { PropsPanneau } from '../types'
+import ImpactCO2, { distanceKm } from './ImpactCO2'
 import FriseTrajet from '../../components/voyage/FriseTrajet'
 import { AnneauScore } from '../../components/voyage/IndiceConfiance'
 import PastilleNiveau, { PuceNiveau } from '../../components/voyage/PastilleNiveau'
@@ -120,11 +131,147 @@ function resumeControles(controles: Controle[]): string {
   return morceaux.join(' · ')
 }
 
+const SENS: Record<'aller' | 'retour', { titre: string; id: string }> = {
+  aller: { titre: 'Autre horaire pour l’aller', id: 'changer_aller' },
+  retour: { titre: 'Autre horaire pour le retour', id: 'changer_retour' },
+}
+
+/** Liste de circulations faisables (calculées par le serveur) pour changer l'aller ou le retour. */
+function AutreHoraire({
+  sens,
+  options,
+  envoyer,
+  occupe,
+}: {
+  sens: 'aller' | 'retour'
+  options: OptionHoraire[]
+  envoyer: PropsPanneau['envoyer']
+  occupe: boolean
+}) {
+  const autres = options.filter((o) => !o.actuel).length
+  if (options.length < 2) return null
+  return (
+    <Repliable titre={SENS[sens].titre} resume={`${autres} ${pluriel(autres, 'autre choix', 'autres choix')}`}>
+      <p className="flex items-center gap-1.5 pb-2 text-xs">
+        <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />
+        {sens === 'retour' ? 'Retours possibles avant votre heure limite.' : 'Départs possibles depuis votre gare.'}
+      </p>
+      <ul className="grid gap-2">
+        {options.map((o) => (
+          <li key={o.id}>
+            <button
+              type="button"
+              disabled={occupe || o.actuel}
+              aria-current={o.actuel ? 'true' : undefined}
+              onClick={() => envoyer({ type: 'choix', id: `${SENS[sens].id}:${o.id}` })}
+              className={`grid w-full min-w-0 gap-1.5 rounded-field border-2 p-2.5 text-left ${
+                o.actuel ? 'border-primary bg-base-200' : 'border-base-300 bg-base-100 hover:border-primary'
+              }`}
+            >
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 font-bold tabular-nums">
+                <Clock className="size-4 shrink-0" aria-hidden="true" />
+                {o.depart} → {o.arrivee}
+                <span className="text-xs font-semibold">
+                  {formaterDuree(o.duree_min)} · {o.correspondances === 0 ? 'direct' : `${o.correspondances} corresp.`}
+                </span>
+                {o.actuel && (
+                  <span className="badge badge-sm gap-1 font-bold">
+                    <CheckCircle2 className="size-3.5" aria-hidden="true" />
+                    Horaire actuel
+                  </span>
+                )}
+              </span>
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span className="flex items-center gap-1 tabular-nums">
+                  <Users className="size-3.5 shrink-0" aria-hidden="true" />
+                  {o.places_disponibles} places pour {o.besoin} voyageurs
+                </span>
+                <PastilleNiveau niveau={o.niveau} libelle={LIBELLES_INDICE[o.niveau]} />
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Repliable>
+  )
+}
+
+function DatesProches({
+  dates,
+  envoyer,
+  occupe,
+}: {
+  dates: DateProche[]
+  envoyer: PropsPanneau['envoyer']
+  occupe: boolean
+}) {
+  return (
+    <ul className="grid gap-2">
+      {dates.map((d) => (
+        <li key={d.date}>
+          <button
+            type="button"
+            disabled={occupe}
+            onClick={() => envoyer({ type: 'choix', id: `choisir_date:${d.date}` })}
+            className="grid w-full min-w-0 gap-1 rounded-field border-2 border-base-300 bg-base-100 p-3 text-left hover:border-primary"
+          >
+            <span className="flex flex-wrap items-center gap-2 font-bold">
+              <CalendarSearch className="size-4 shrink-0" aria-hidden="true" />
+              {formaterDateLongue(d.date)}
+              <span className="text-xs font-semibold tabular-nums">
+                ({d.ecart_jours > 0 ? '+' : '−'}
+                {Math.abs(d.ecart_jours)} j)
+              </span>
+            </span>
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
+              <span className="flex items-center gap-1">
+                <Train className="size-3.5 shrink-0" aria-hidden="true" />
+                Aller {d.aller.depart} · retour {d.retour.arrivee}
+              </span>
+              <PastilleNiveau niveau={d.niveau} libelle={LIBELLES_INDICE[d.niveau]} />
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /** Étape « trajet » : le meilleur trajet pour la date demandée, compact. Le détail est à la demande. */
-export default function PanneauTrajet({ reponse, chargement }: PropsPanneau) {
+export default function PanneauTrajet({ reponse, chargement, envoyer }: PropsPanneau) {
   const titreId = useId()
   const proposition = reponse.proposition
   const destination = reponse.destination
+
+  const retourEtape = (
+    <button
+      type="button"
+      disabled={chargement}
+      onClick={() => envoyer({ type: 'choix', id: 'retour_etape' })}
+      className="btn btn-ghost btn-sm justify-start gap-1.5 self-start"
+    >
+      <ArrowLeftRight className="size-4" aria-hidden="true" />
+      Revenir à l’étape précédente
+    </button>
+  )
+
+  if (!proposition && (reponse.dates_proches?.length ?? 0) > 0) {
+    return (
+      <div className="flex min-w-0 flex-col gap-3">
+        <CadrePanneau titreId={titreId} occupe={chargement}>
+          <div className="flex flex-col gap-3 p-4 sm:p-5">
+            <h2 id={titreId} className="flex items-start gap-2 text-lg font-bold leading-tight">
+              <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
+              Pas de train fiable à cette date
+            </h2>
+            <p className="text-sm">Choisissez une date proche : Tchouette relance le parcours avec elle.</p>
+            <DatesProches dates={reponse.dates_proches ?? []} envoyer={envoyer} occupe={chargement} />
+          </div>
+        </CadrePanneau>
+        {retourEtape}
+      </div>
+    )
+  }
 
   if (!proposition) {
     return chargement ? (
@@ -142,6 +289,8 @@ export default function PanneauTrajet({ reponse, chargement }: PropsPanneau) {
   const jauge = jaugeLaPlusTendue(proposition.jauge_aller, proposition.jauge_retour)
   const jaugesDifferent = proposition.jauge_aller.disponibles !== proposition.jauge_retour.disponibles
   const { indice } = proposition
+  const depart = reponse.etat.demande.gare_depart
+  const kmAllerRetour = depart && destination?.gare ? 2 * distanceKm(depart, destination.gare) : null
   const bloquant = proposition.controles.some((c) => c.niveau === 'rouge')
 
   return (
@@ -211,6 +360,13 @@ export default function PanneauTrajet({ reponse, chargement }: PropsPanneau) {
         </div>
       </CadrePanneau>
 
+      {reponse.alternatives && (
+        <>
+          <AutreHoraire sens="aller" options={reponse.alternatives.aller} envoyer={envoyer} occupe={chargement} />
+          <AutreHoraire sens="retour" options={reponse.alternatives.retour} envoyer={envoyer} occupe={chargement} />
+        </>
+      )}
+      {kmAllerRetour !== null && <ImpactCO2 km={kmAllerRetour} />}
       <Repliable titre="Voir les contrôles" resume={resumeControles(proposition.controles)}>
         <ListeControlesEnseignant controles={proposition.controles} />
       </Repliable>
@@ -218,6 +374,7 @@ export default function PanneauTrajet({ reponse, chargement }: PropsPanneau) {
         <ListeCriteres details={indice.details} />
       </Repliable>
       {reponse.detail && <DetailPourquoi key={reponse.detail.titre} detail={reponse.detail} />}
+      {retourEtape}
     </div>
   )
 }

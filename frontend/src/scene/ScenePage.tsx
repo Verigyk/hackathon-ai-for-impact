@@ -121,7 +121,15 @@ export default function ScenePage() {
         ) : (
           reponse && (
             <div key={reponse.etat.tours} className="flex flex-col gap-5">
-              <CartesReponse cartes={reponse.cartes} onChoisir={choisir} desactive={chargement} />
+              <CartesReponse
+                cartes={
+                  reponse.etape === 'destination' && (reponse.choix_destinations?.length ?? 0) >= 2
+                    ? reponse.cartes.filter((c) => c.id !== 'choisir' && c.id !== 'vote') // remplacées par la sélection multiple
+                    : reponse.cartes
+                }
+                onChoisir={choisir}
+                desactive={chargement}
+              />
               {saisie?.type === 'effectif' && (
                 <WidgetEffectif saisie={saisie} actionPrimaireDejaPresente={primairePresente} onValider={agir} />
               )}

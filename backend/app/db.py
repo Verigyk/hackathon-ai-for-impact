@@ -230,6 +230,18 @@ CREATE TABLE IF NOT EXISTS sondage_vote (
   vote_le          TEXT NOT NULL,
   PRIMARY KEY (sondage_code, votant_empreinte)
 );
+
+CREATE TABLE IF NOT EXISTS sondage_manuel (
+  sondage_code TEXT    NOT NULL REFERENCES sondage(code),
+  site_id      TEXT    NOT NULL,
+  nb           INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (sondage_code, site_id)
+);
+
+CREATE TABLE IF NOT EXISTS sondage_effectif (
+  sondage_code TEXT PRIMARY KEY REFERENCES sondage(code),
+  effectif     INTEGER NOT NULL
+);
 """
 SCHEMA += SCHEMA_SONDAGES
 

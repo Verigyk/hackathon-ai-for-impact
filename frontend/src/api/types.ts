@@ -206,7 +206,9 @@ export interface OptionSondage {
   interet_pedagogique: string
   indice_confiance: number
   niveau: Niveau
-  votes: number
+  votes: number // total = QR + saisie manuelle
+  votes_qr: number
+  votes_manuels: number
 }
 
 export interface Sondage {
@@ -217,6 +219,9 @@ export interface Sondage {
   total_votes: number
   gagnant: string | null
   cree_le: string
+  effectif: number | null
+  votes_qr: number
+  votes_manuels: number
 }
 
 export interface Reseau {
@@ -274,6 +279,7 @@ export type EvenementScene =
   | { type: 'retour' }
   | { type: 'vote_termine'; site_id: string }
   | { type: 'prereservation_faite'; reference: string }
+  | { type: 'soumettre_vote'; ids: string[] } // 1 id = choix direct, 2 à 4 = vote de la classe
 
 export type IconeScene =
   | 'chateau'
@@ -326,6 +332,22 @@ export interface DetailScene {
   lignes: { libelle: string; valeur: string; niveau: Niveau | null }[]
 }
 
+export interface PointCarte {
+  lat: number
+  lon: number
+  libelle: string
+  type: 'depart' | 'arrivee' | 'destination' | 'candidate'
+  numero?: number | null
+  actif: boolean
+}
+
+export interface CarteGeo {
+  centre: [number, number]
+  zoom: number
+  points: PointCarte[]
+  traces: [number, number][][] // traces[0] = marche gare -> site
+}
+
 export interface ReponseScene {
   etat: EtatScene
   etape: Etape
@@ -341,4 +363,38 @@ export interface ReponseScene {
   proposition: Proposition | null
   detail: DetailScene | null
   mode: 'llm' | 'demo'
+  choix_destinations?: Destination[]
+  carte?: CarteGeo | null
+  alternatives?: AlternativesTrajet | null
+  dates_proches?: DateProche[]
+}
+
+// --- Trajet modifiable et dates proches ---
+
+export interface OptionHoraire {
+  /** Numéros de train joints par « + » : à renvoyer dans l'événement choix `changer_aller:<id>` / `changer_retour:<id>`. */
+  id: string
+  depart: string
+  arrivee: string
+  duree_min: number
+  correspondances: number
+  places_disponibles: number
+  besoin: number
+  niveau: Niveau
+  score: number
+  actuel: boolean
+}
+
+export interface AlternativesTrajet {
+  aller: OptionHoraire[]
+  retour: OptionHoraire[]
+}
+
+export interface DateProche {
+  date: string
+  ecart_jours: number
+  aller: Trajet
+  retour: Trajet
+  niveau: Niveau
+  score: number
 }

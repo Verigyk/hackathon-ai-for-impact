@@ -236,7 +236,9 @@ class OptionSondage(Modele):
     interet_pedagogique: str
     indice_confiance: int
     niveau: Niveau
-    votes: int
+    votes: int                 # total = QR + saisie manuelle
+    votes_qr: int = 0
+    votes_manuels: int = 0
 
 
 class Sondage(Modele):
@@ -247,6 +249,13 @@ class Sondage(Modele):
     total_votes: int
     gagnant: Optional[str] = None
     cree_le: str
+    effectif: Optional[int] = None     # élèves de la classe : plafond des votes
+    votes_qr: int = 0
+    votes_manuels: int = 0
+
+
+class RequeteVotesManuels(Modele):
+    votes: dict[str, int]              # site_id -> nombre de votes saisis en classe (remplace la saisie précédente)
 
 
 class RequeteSondage(Modele):
@@ -331,8 +340,15 @@ class EvPrereservationFaite(ModeleStrict):
     reference: str
 
 
+class EvSoumettreVote(ModeleStrict):
+    """L'enseignant coche 1 à 4 destinations candidates : 1 = choix direct, 2 à 4 = vote de la classe."""
+    type: Literal["soumettre_vote"]
+    ids: list[str] = Field(min_length=1, max_length=4)
+
+
 EvenementScene = Annotated[
-    Union[EvDemarrer, EvTexte, EvChoix, EvValeur, EvRetour, EvVoteTermine, EvPrereservationFaite],
+    Union[EvDemarrer, EvTexte, EvChoix, EvValeur, EvRetour, EvVoteTermine, EvPrereservationFaite,
+          EvSoumettreVote],
     Field(discriminator="type")]
 
 
@@ -394,6 +410,66 @@ class DetailScene(ModeleStrict):
     lignes: list[LigneDetail]
 
 
+class PointCarte(ModeleStrict):
+    lat: float
+    lon: float
+    libelle: str
+    type: Literal["depart", "arrivee", "destination", "candidate"]
+    numero: Optional[int] = None
+    actif: bool = False
+
+
+class CarteGeo(ModeleStrict):
+    centre: list[float]                # [lat, lon]
+    zoom: int
+    points: list[PointCarte]
+    traces: list[list[list[float]]] = Field(default_factory=list)   # traces[0] = marche gare -> site
+
+
+# --- Trajet modifiable et dates proches (ajout) ---------------------------------------------
+
+class OptionHoraire(ModeleStrict):
+    id: str                       # numéros de train joints par « + » : à renvoyer dans changer_aller:<id>
+    depart: str
+    arrivee: str
+    duree_min: int
+    correspondances: int
+    places_disponibles: int
+    besoin: int
+    niveau: Niveau
+    score: int
+    actuel: bool = False
+
+
+class AlternativesTrajet(ModeleStrict):
+    aller: list[OptionHoraire] = Field(default_factory=list)
+    retour: list[OptionHoraire] = Field(default_factory=list)
+
+
+class DateProche(ModeleStrict):
+    date: str                     # AAAA-MM-JJ
+    ecart_jours: int              # signé : -2 = deux jours avant la date demandée
+    aller: Trajet
+    retour: Trajet
+    niveau: Niveau
+    score: int
+
+
+class DatesProchesRequete(ModeleStrict):
+    date: str
+    gare_depart: str                           # code UIC ou nom de la gare de départ
+    site_id: Optional[str] = None              # destination (ou, à défaut, gare d'arrivée ci-dessous)
+    gare_arrivee: Optional[str] = None
+    effectif: int = Field(ge=1, le=200)
+    heure_retour_max: Optional[str] = None
+    heure_depart_min: Optional[str] = None
+
+
+class DatesProchesReponse(ModeleStrict):
+    date_demandee: str
+    propositions: list[DateProche]
+
+
 class ReponseScene(ModeleStrict):
     etat: EtatScene
     etape: Etape
@@ -409,3 +485,7 @@ class ReponseScene(ModeleStrict):
     proposition: Optional[Proposition] = None
     detail: Optional[DetailScene] = None
     mode: Literal["llm", "demo"]
+    alternatives: Optional[AlternativesTrajet] = None   # horaires aller / retour de rechange (étape trajet)
+    dates_proches: list[DateProche] = Field(default_factory=list)  # si aucun train fiable à la date demandée
+    choix_destinations: list[Destination] = Field(default_factory=list)   # candidates à cocher (étape destination)
+    carte: Optional[CarteGeo] = None

@@ -65,3 +65,12 @@ HEURE_DEPART_DEFAUT = "08:00"
 HEURE_RETOUR_DEFAUT = "18:00"
 
 MESSAGE_PRE_RESERVATION = "Demande de pré-réservation transmise — confirmation en attente"
+
+
+# --- RAG (recherche de lieux hors ligne) ------------------------------------
+RAG_TOP58_JSON = REPO_DIR / "database_reduit_embedding" / "data" / "top-des-sites-touristiques-2021-enrichi.json"
+RAG_DATATOURISME_CSV = REPO_DIR / "database_embedding" / "data" / "datatourisme-reg-occ-clean.csv"
+RAG_TOP58_METRIQUES = REPO_DIR / "data" / "top58_metriques.json"
+GTFS_STOPS_TXT = REPO_DIR / "reseau_urbain_gare_coordonnees" / "stops.txt"
+MARCHE_VITESSE_KMH = 4.0      # hypothèse : marche d'un groupe scolaire
+MARCHE_COEF_DETOUR = 1.3      # hypothèse : détour réel vs vol d'oiseau

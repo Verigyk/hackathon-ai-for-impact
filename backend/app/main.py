@@ -19,7 +19,7 @@ from . import config, db, llm, schemas
 from .services import (chat, comprendre, dossiers, expliquer, propositions, recommander, retours,
                        sites, trains)
 from .services.texte import date_fr, heure_fr
-from .services import scene, sondages
+from .services import dates_proches, scene, sondages
 
 log = logging.getLogger("lio")
 
@@ -114,9 +114,24 @@ def _demande_exploitable(conn: sqlite3.Connection, d: schemas.Demande) -> schema
 
 # --- Routes -----------------------------------------------------------------------------------
 
-@app.get("/api/sante", response_model=schemas.Sante)
-def sante() -> schemas.Sante:
-    return schemas.Sante(ok=True, mode=llm.mode(), donnees=db.nature_donnees())
+class SanteDetaillee(schemas.Sante):
+    """Sante + provenance des données (champs additifs, ignorés par les clients existants)."""
+    source: str = ""            # libellé d'affichage : "SNCF 2026" ou "Démonstration"
+    hypotheses: list[str] = []  # hypothèses actives (ex. semaine type pour novembre 2026)
+
+
+@app.get("/api/sante", response_model=SanteDetaillee)
+def sante() -> SanteDetaillee:
+    donnees, source, hyp = db.nature_donnees(), "Démonstration", []
+    try:
+        with db.connexion() as conn:
+            source = db.meta_get(conn, "source_libelle") or source
+            if donnees == "sncf":
+                from etl import import_sncf
+                hyp = import_sncf.hypotheses(conn)
+    except Exception:  # base absente ou ancienne : /api/sante ne doit jamais échouer
+        pass
+    return SanteDetaillee(ok=True, mode=llm.mode(), donnees=donnees, source=source, hypotheses=hyp)
 
 
 @app.post("/api/chat", response_model=schemas.ReponseChat)
@@ -218,6 +233,12 @@ def voter_sondage(code: str, req: schemas.RequeteVote, conn: sqlite3.Connection 
     return sondages.voter(conn, code, req)
 
 
+@app.post("/api/sondages/{code}/votes-manuels", response_model=schemas.Sondage)
+def votes_manuels_sondage(code: str, req: schemas.RequeteVotesManuels,
+                          conn: sqlite3.Connection = Depends(connexion)):
+    return sondages.votes_manuels(conn, code, req)
+
+
 @app.post("/api/sondages/{code}/fermer", response_model=schemas.Sondage)
 def fermer_sondage(code: str, conn: sqlite3.Connection = Depends(connexion)):
     return sondages.fermer(conn, code)
@@ -229,6 +250,11 @@ def reseau() -> schemas.Reseau:
 
 
 # --- Scène « Tchouette est l'interface » (v3) -------------------------------------------------
+
+@app.post("/api/dates-proches", response_model=schemas.DatesProchesReponse)
+def route_dates_proches(req: schemas.DatesProchesRequete, conn: sqlite3.Connection = Depends(connexion)):
+    return dates_proches.depuis_requete(conn, req)
+
 
 @app.post("/api/scene", response_model=schemas.ReponseScene)
 def route_scene(req: schemas.RequeteScene, conn: sqlite3.Connection = Depends(connexion)):
