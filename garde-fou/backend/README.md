@@ -1,0 +1,114 @@
+# Backend du copilote des sorties scolaires liO
+
+API FastAPI qui sert le contrat de `API_CONTRACT.md` (racine du repo), sous le préfixe `/api`, pour le
+front Vite sur `http://localhost:5173`.
+
+## Lancer
+
+```bash
+cd backend
+python3 -m venv .venv                      # Python 3.14 testé
+.venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+Au premier démarrage, si `backend/lio.db` n'existe pas, l'API la construit :
+
+- depuis les **vrais fichiers SNCF** s'ils sont dans `data/` (racine du repo) ou `backend/data/` :
+  `desserte.csv`, `Data_Hackathon.csv`, `gares.json` (+ un fichier « trains groupes » optionnel) ;
+- sinon depuis le **jeu de démonstration** (`etl/seed_demo.py`).
+
+`GET /api/sante` le dit honnêtement : `donnees: "sncf"` ou `"demo"`, et `mode: "llm"` si
+`ANTHROPIC_API_KEY` est définie, sinon `"demo"`.
+
+Pour repartir d'une base neuve (références de dossier à `LIO-2026-000001`, jauges d'origine) :
+supprimez `backend/lio.db` ou lancez `.venv/bin/python -m etl.seed_demo --reset`.
+Pour forcer la construction depuis les fichiers SNCF : `.venv/bin/python -m etl.build_db`.
+
+## Tests
+
+```bash
+cd backend && .venv/bin/python -m pytest
+```
+
+Ils couvrent le parseur (message du scénario), les règles R1 à R10 et la jauge, l'indice de
+confiance, le garde-fou des explications du LLM, l'ETL des fichiers SNCF et le scénario complet
+via `TestClient`.
+
+## Variables d'environnement
+
+| Variable | Effet |
+|---|---|
+| `ANTHROPIC_API_KEY` | Active le mode `llm` (sinon mode `demo`, entièrement déterministe) |
+| `LIO_LLM_MODEL` | Modèle Claude (défaut `claude-opus-5-5`) |
+| `LIO_DB_PATH` | Chemin de la base SQLite (défaut `backend/lio.db`) |
+| `LIO_DATA_DIR` | Dossier supplémentaire où chercher les fichiers SNCF |
+| `LIO_AUJOURDHUI` | Date du jour forcée (`AAAA-MM-JJ`), pour des démos et tests reproductibles |
+| `LIO_GEOCODAGE_EN_LIGNE=0` | Coupe l'appel à l'API Adresse (table locale des communes seulement) |
+
+## Architecture
+
+```text
+app/main.py              routes FastAPI, CORS, erreurs { "detail": "…" } en français
+app/schemas.py           contrat d'API en Pydantic (champ pour champ)
+app/llm.py               les 3 appels au LLM : comprendre, recommander, expliquer
+app/prompts.py           instructions communes et prompts séparés par rôle
+app/llm_schemas.py       sorties LLM strictes (types, dates, heures, notes)
+app/garde_fous.py        provenance des champs, catalogue, rendu des faits intacts
+app/db.py                schéma SQLite (livrables/05-mcd-mld.md), connexion, initialisation
+app/services/
+  dialogue.py            demandes de correction prioritaires, indépendantes du modèle
+  chat.py                Tchouette : une question de relance à la fois, suggestions
+  comprendre.py          parseur français, gare par son nom, géocodage, champs manquants
+  geo.py                 communes d'Occitanie, API Adresse (2 s, repli local), gare la plus proche
+  recommander.py         3 destinations du catalogue (hors commune de départ)
+  trains.py              recherche SQL des trains groupes, jour type, correspondance ≥ 10 min
+  controles.py           règles R1 à R10 et jauge (jamais l'identité des autres groupes)
+  confiance.py           indice sur 100 (cahier des charges §5)
+  propositions.py        aller-retour, créneau de visite, alternative d'une proposition rouge
+  expliquer.py           explication claire (gabarits, ou LLM avec garde-fou)
+  dossiers.py            OPTION -> PRE_RESERVATION, référence LIO-AAAA-NNNNNN, réponse simulée
+  retours.py             retour d'expérience, critère satisfaction avant/après
+etl/build_db.py          vrais fichiers SNCF -> lio.db
+etl/seed_demo.py         jeu de démonstration -> lio.db
+etl/catalogue.py         sites culturels réels d'Occitanie (temps de marche approximatifs)
+etl/reseau_demo.py       gares réelles, trains liO fictifs, options simulées
+```
+
+## Ce que fait (et ne fait pas) le LLM
+
+Le LLM ne calcule ni horaires, ni places, ni score global. Il extrait les champs étayés de la
+demande, note et sélectionne des sites **du catalogue**, puis choisit une introduction autorisée
+pour l'explication. Python conserve le résumé du trajet et tous ses avertissements intacts.
+Les champs reconnus par le parseur ne sont jamais écrasés par le modèle. Une sortie invalide,
+un refus ou une erreur fournisseur utilise le repli déterministe.
+La note pédagogique du modèle sert au classement ; le score de confiance reste entièrement
+calculé à partir des règles et données locales. Les sites risqués sont écartés avant l'appel
+de recommandation. Les réponses tronquées sont rejetées et les corrections du professeur
+sont traitées avant les questions sur les autres champs manquants.
+
+Voir [GARDE_FOUS_LLM.md](GARDE_FOUS_LLM.md) pour le fonctionnement, la configuration,
+les tests et les limites des protections.
+
+## Hypothèses de calcul (à connaître pour la démo)
+
+- **Jour type** : la grille couvre février à juin 2026. Une date hors grille est ramenée au même jour
+  de la semaine (le jour de ce type qui compte le plus de circulations), et le message le dit.
+- **Temps de marche d'un groupe** : individuel × 1,3 + 5 min. Les temps du catalogue sont approximatifs.
+- **Créneau de visite** : premier créneau indicatif (tous les quarts d'heure à partir de l'ouverture)
+  laissant 30 min de marge (R4). À la journée, on reste sur place la durée de visite + 1 h de pause
+  déjeuner, puis on prend le premier retour qui ramène le groupe avant l'heure maximale (R5, marche
+  gare → établissement comprise).
+- **Plage 9h-16h (R6)** et **J-21 (R7)** : vigilance, jamais bloquantes.
+- **Alternative** d'une proposition rouge : train suivant (ou autre retour), sinon même trajet un
+  autre jour dans les 7 jours. Elle repasse par les mêmes contrôles.
+- **Pré-réservation** : revérifie la jauge, pose une option (positionnement) sur chaque train, puis
+  transmet la demande. `CONFIRMATION` n'arrive que par `simuler-reponse`.
+
+## Jeu de démonstration
+
+Tout ce qui est simulé est marqué (`est_simule = 1`) : trains et horaires (numéros fictifs), indicateurs
+mensuels, options d'autres groupes, quelques retours d'expérience. Les gares et les sites culturels
+sont réels ; les codes UIC sont des codes de démonstration. Sur le scénario (collège de Foix, 5e,
+Moyen Âge, 42 élèves + 4 accompagnateurs, jeudi 12 novembre 2026), une option simulée de 10 places sur
+le premier train du matin Foix → Toulouse rend sa jauge rouge et déclenche l'alternative.
