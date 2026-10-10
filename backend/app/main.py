@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -14,11 +15,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import db, llm, schemas
+from . import config, db, llm, schemas
 from .services import (chat, comprendre, dossiers, expliquer, propositions, recommander, retours,
                        sites, trains)
 from .services.texte import date_fr, heure_fr
-from .services import sondages
+from .services import scene, sondages
 
 log = logging.getLogger("lio")
 
@@ -56,6 +57,10 @@ def _message_validation(erreurs: list[dict]) -> str:
         return "Le corps de la requête n'est pas un JSON valide."
     if t in ("greater_than_equal", "less_than_equal", "greater_than", "less_than"):
         return f"Le champ « {champ} » doit être une note de 1 à 5."
+    if t == "extra_forbidden":
+        return f"Champ inconnu : « {champ} »."
+    if t == "union_tag_invalid" or t == "union_tag_not_found":
+        return f"Type d'événement inconnu ou manquant pour « {champ} »."
     if t == "literal_error":
         return f"Valeur non autorisée pour « {champ} » (valeurs possibles : {ctx.get('expected', '?')})."
     if t.startswith("int"):
@@ -98,6 +103,12 @@ def _demande_exploitable(conn: sqlite3.Connection, d: schemas.Demande) -> schema
     if requis:
         raise HTTPException(422, "Il manque des informations pour chercher des trains : "
                                  + ", ".join(LIBELLES_CHAMPS[c] for c in requis) + ".")
+    try:
+        sortie = date.fromisoformat(d.date)
+    except ValueError:
+        raise HTTPException(422, "La date de la sortie est illisible : indiquez-la sous la forme AAAA-MM-JJ.")
+    if sortie < config.aujourdhui():  # audit n°17 : une date passée n'est jamais acceptée
+        raise HTTPException(422, f"Le {date_fr(sortie)} est déjà passé : choisissez une date à venir.")
     return d
 
 
@@ -215,3 +226,10 @@ def fermer_sondage(code: str, conn: sqlite3.Connection = Depends(connexion)):
 @app.get("/api/reseau", response_model=schemas.Reseau)
 def reseau() -> schemas.Reseau:
     return schemas.Reseau(ip_locale=sondages.ip_locale())
+
+
+# --- Scène « Tchouette est l'interface » (v3) -------------------------------------------------
+
+@app.post("/api/scene", response_model=schemas.ReponseScene)
+def route_scene(req: schemas.RequeteScene, conn: sqlite3.Connection = Depends(connexion)):
+    return scene.jouer(conn, req)

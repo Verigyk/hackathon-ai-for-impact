@@ -26,7 +26,7 @@ from datetime import date
 from pathlib import Path
 
 from app import config, db
-from . import commun
+from . import commun, import_datatourisme
 
 MOIS = ["janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet", "aout",
         "septembre", "octobre", "novembre", "decembre"]
@@ -247,6 +247,8 @@ def construire(path: Path | None = None) -> None:
         if ignores:
             print("Sites du catalogue sans gare correspondante :", ignores, file=sys.stderr)
         _option_scenario(conn)
+        # Lieux DATAtourisme en complément du catalogue fait main (voir etl/import_datatourisme.py).
+        import_datatourisme.importer_si_disponible(conn)
         db.meta_set(conn, "donnees", "sncf")
         db.meta_set(conn, "construite_le", db.maintenant_iso())
         db.meta_set(conn, "sequence_dossier", "0")

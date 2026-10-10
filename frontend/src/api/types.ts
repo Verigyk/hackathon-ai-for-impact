@@ -222,3 +222,123 @@ export interface Sondage {
 export interface Reseau {
   ip_locale: string | null
 }
+
+// ---------- Scène « Tchouette est l'interface » (v3) : miroir de API_CONTRACT.md ----------
+
+export type Etape =
+  | 'accueil'
+  | 'theme'
+  | 'criteres'
+  | 'destination'
+  | 'trajet'
+  | 'vote'
+  | 'prereservation'
+  | 'fin'
+
+export type HumeurScene =
+  | 'repos'
+  | 'reflexion'
+  | 'parle'
+  | 'joie'
+  | 'inquiete'
+  | 'salue'
+  | 'pointe'
+  | 'loupe'
+  | 'celebre'
+
+export type AncreScene = 'centre' | 'gauche' | 'droite' | 'haut-droite' | 'bas-droite'
+
+export interface Replique {
+  qui: 'tchouette' | 'enseignant'
+  texte: string
+}
+
+export interface EtatScene {
+  etape: Etape
+  demande: Demande
+  candidats: string[]
+  rang: number
+  site_id: string | null
+  proposition_id: string | null
+  vote_code: string | null
+  dossier_reference: string | null
+  carnet: Replique[]
+  tours: number
+}
+
+export type EvenementScene =
+  | { type: 'demarrer' }
+  | { type: 'texte'; texte: string }
+  | { type: 'choix'; id: string }
+  | { type: 'valeur'; champ: 'effectif' | 'date' | 'lieu_depart'; valeur: Record<string, string | number> }
+  | { type: 'retour' }
+  | { type: 'vote_termine'; site_id: string }
+  | { type: 'prereservation_faite'; reference: string }
+
+export type IconeScene =
+  | 'chateau'
+  | 'os'
+  | 'colonnes'
+  | 'planete'
+  | 'feuille'
+  | 'palette'
+  | 'ampoule'
+  | 'pin'
+  | 'etincelles'
+  | 'train'
+  | 'qr'
+  | 'coeur'
+  | 'oui'
+  | 'non'
+  | 'retour'
+  | 'loupe'
+  | 'calendrier'
+  | 'groupe'
+
+export interface CarteScene {
+  id: string
+  titre: string
+  sous_titre?: string
+  icone?: IconeScene
+  style?: 'primaire' | 'neutre'
+}
+
+export type Saisie =
+  | null
+  | { type: 'effectif'; min: number; max: number; eleves?: number; accompagnateurs?: number }
+  | { type: 'date'; min: string; aide?: string }
+  | { type: 'lieu'; suggestions: string[] }
+
+export interface BadgeSource {
+  icone: 'chart' | 'database' | 'shield' | 'train' | 'pin' | 'euro' | 'users' | 'clock'
+  texte: string
+  source: 'sncf' | 'datatourisme' | 'catalogue' | 'calcul' | 'demo'
+}
+
+export interface PuceCritere {
+  cle: string
+  libelle: string
+  valeur: string
+}
+
+export interface DetailScene {
+  titre: string
+  lignes: { libelle: string; valeur: string; niveau: Niveau | null }[]
+}
+
+export interface ReponseScene {
+  etat: EtatScene
+  etape: Etape
+  replique: string
+  humeur: HumeurScene
+  ancre: AncreScene
+  cartes: CarteScene[]
+  saisie: Saisie
+  badges: BadgeSource[]
+  puces: PuceCritere[]
+  manquants: string[]
+  destination: Destination | null
+  proposition: Proposition | null
+  detail: DetailScene | null
+  mode: 'llm' | 'demo'
+}

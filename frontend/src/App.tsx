@@ -7,6 +7,7 @@ import Dossier from './pages/Dossier'
 import PageIntrouvable from './pages/PageIntrouvable'
 import PreReservation from './pages/PreReservation'
 import Retour from './pages/Retour'
+import ScenePage from './scene/ScenePage'
 import Trajets from './pages/Trajets'
 import VoteAnimer from './pages/VoteAnimer'
 import VoteEleve from './pages/VoteEleve'
@@ -14,8 +15,11 @@ import VoteEleve from './pages/VoteEleve'
 export default function App() {
   return (
     <Routes>
+      {/* Nouvelle entrée : la scène Tchouette, hors du shell classique. */}
+      <Route index element={<ScenePage />} />
       <Route element={<AppShell />}>
-        <Route index element={<Accueil />} />
+        {/* Ancien accueil conservé comme filet de sécurité. */}
+        <Route path="classique" element={<Accueil />} />
         <Route path="destinations" element={<Destinations />} />
         <Route path="trajets/:siteId" element={<Trajets />} />
         <Route path="comparer" element={<Comparer />} />

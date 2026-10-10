@@ -79,6 +79,9 @@ def pre_reserver(conn: sqlite3.Connection, req: schemas.RequetePreReservation) -
         return lire(conn, existant["reference"])  # même demande envoyée deux fois : même dossier
 
     p = schemas.Proposition.model_validate_json(row["proposition_json"])
+    if p.date < config.aujourdhui().isoformat():  # audit n°17
+        raise HTTPException(409, f"La date de cette proposition ({date_fr(p.date)}) est déjà passée : "
+                                 f"relancez la recherche avec une date à venir.")
     rouges = [c for c in p.controles if c.niveau == "rouge"]
     if rouges:
         raise HTTPException(409, "Cette proposition n'est pas assez fiable (" + rouges[0].message.rstrip(".")

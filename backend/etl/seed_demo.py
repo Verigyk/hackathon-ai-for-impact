@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from app import config, db
-from . import commun, reseau_demo as R
+from . import commun, import_datatourisme, reseau_demo as R
 
 # Décalages mensuels de somme nulle : la moyenne des mois reste la valeur cible.
 _ONDULATION = [1.2, -0.8, 0.5, -1.0, 0.3, -0.4, 0.6, -0.2, -0.2]
@@ -102,6 +102,10 @@ def semer(path: Path | None = None) -> None:
                      dossier_reference, est_simule) VALUES (?,?,?,NULL,1)""",
                 (train, jour, places),
             )
+
+        # Lieux DATAtourisme en complément du catalogue fait main (si le fichier est là et que
+        # LIO_DATATOURISME n'est pas à 0).
+        import_datatourisme.importer_si_disponible(conn)
 
         db.meta_set(conn, "donnees", "demo")
         db.meta_set(conn, "construite_le", db.maintenant_iso())

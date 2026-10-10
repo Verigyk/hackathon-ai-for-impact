@@ -293,8 +293,12 @@ def planifier(conn: sqlite3.Connection, ctx: Contexte, site: sqlite3.Row, jour: 
             cands[p.proposition_id] = c
 
     if props:
-        non_rouges = [p for p in props if p.indice.niveau != "rouge"]
-        best = max(non_rouges or props, key=lambda p: p.indice.score)
+        # L'indice d'une destination est celui du meilleur trajet de la DATE DEMANDÉE : l'alternative
+        # d'un autre jour ne le relève jamais (audit n°2). Si tous les trajets du jour sont bloqués,
+        # la destination est rouge ce jour-là, même si un autre jour fonctionne.
+        sur_jour = [p for p in props if p.date == jour] or props
+        non_rouges = [p for p in sur_jour if p.indice.niveau != "rouge"]
+        best = max(non_rouges or sur_jour, key=lambda p: p.indice.score)
         indice, niveau = best.indice.score, best.indice.niveau
     else:
         indice, niveau = 0, "rouge"

@@ -40,7 +40,9 @@ via `TestClient`.
 | Variable | Effet |
 |---|---|
 | `ANTHROPIC_API_KEY` | Active le mode `llm` (sinon mode `demo`, entièrement déterministe) |
-| `LIO_LLM_MODEL` | Modèle Claude (défaut `claude-opus-5-5`) |
+| `LIO_LLM_MODEL` | Modèle Claude des appels classiques (défaut `claude-opus-5-5`) |
+| `LIO_LLM_MODEL_SCENE` | Modèle Claude de la scène Tchouette (défaut `claude-sonnet-5-5`) |
+| `LIO_LLM_DELAI_SCENE` | Délai max d'un appel de la scène, en secondes (défaut `8`) |
 | `LIO_DB_PATH` | Chemin de la base SQLite (défaut `backend/lio.db`) |
 | `LIO_DATA_DIR` | Dossier supplémentaire où chercher les fichiers SNCF |
 | `LIO_AUJOURDHUI` | Date du jour forcée (`AAAA-MM-JJ`), pour des démos et tests reproductibles |
@@ -78,6 +80,22 @@ Le LLM ne calcule jamais d'horaire, de place ni de score. Il sert à 3 endroits 
 reformuler l'explication d'une proposition à partir des chiffres calculés. Chaque explication passe
 un garde-fou (aucun horaire ni nombre absent des faits, jamais « confirmé ») ; sinon on garde le
 gabarit. En cas d'erreur réseau, de refus ou de sortie invalide, on retombe sur le mode démo.
+
+## Activer l'IA
+
+```bash
+export ANTHROPIC_API_KEY=…        # avant de lancer le back
+.venv/bin/uvicorn app.main:app --reload --port 8000
+curl -s localhost:8000/api/sante  # -> "mode": "llm" (sans clé : "mode": "demo")
+```
+
+La scène Tchouette (`POST /api/scene`) utilise **Claude Sonnet 5.5** (`claude-sonnet-5-5`, effort
+`low`) : rapide et économique, il suffit pour comprendre une phrase et reformuler une réplique
+courte. Au plus **2 appels par message libre** (comprendre l'intention et les champs, en sortie
+structurée, puis reformuler la réplique scriptée), **aucun appel sur un clic de carte**. Délai de 8 s
+sans nouvel essai : au-delà, sur erreur réseau ou refus, ce tour repart en mode démo. Chaque tour
+est journalisé sur `lio.llm` (nombre d'appels, latence, jetons, cache). Le code est dans
+`app/services/scene_llm.py` ; les tests (`tests/test_scene_llm.py`) simulent le client, sans clé.
 
 ## Hypothèses de calcul (à connaître pour la démo)
 

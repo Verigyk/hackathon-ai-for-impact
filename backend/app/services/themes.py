@@ -41,11 +41,62 @@ def theme_dans_texte(texte: str) -> str | None:
     return meilleur[1] if meilleur else None
 
 
+def _occurrences(texte: str) -> tuple[list[str], list[tuple[int, int, str]]]:
+    """Synonymes trouvés (les plus longs d'abord, sans chevauchement) : (mots, [(début, fin, thème)])."""
+    toks = normaliser(texte).split()
+    pris = [False] * len(toks)
+    occ: list[tuple[int, int, str]] = []
+    for syn, canon in _INDEX:
+        mots = syn.split()
+        k = len(mots)
+        for i in range(len(toks) - k + 1):
+            if toks[i:i + k] == mots and not any(pris[i:i + k]):
+                occ.append((i, i + k, canon))
+                for j in range(i, i + k):
+                    pris[j] = True
+    occ.sort()
+    return toks, occ
+
+
+def themes_dans_texte(texte: str) -> list[str]:
+    """Tous les thèmes canoniques évoqués par le texte, dans l'ordre où ils apparaissent."""
+    return list(dict.fromkeys(c for _, _, c in _occurrences(texte)[1]))
+
+
 def canonique(theme: str | None) -> str | None:
+    """Thème canonique d'un libellé, ou None s'il n'existe pas tel quel.
+
+    Nom exact du thème, sinon texte qui n'évoque qu'UN seul thème. Un libellé qui en évoque
+    plusieurs (« Sciences et espace » : sciences + espace) n'est jamais ramené à l'un d'eux en
+    silence (audit n°1) : il reste tel quel et l'appelant doit le signaler.
+    """
     if not theme:
         return None
     n = normaliser(theme)
     for canon in SYNONYMES:
         if normaliser(canon) == n:
             return canon
-    return theme_dans_texte(theme)
+    trouves = themes_dans_texte(theme)
+    return trouves[0] if len(trouves) == 1 else None
+
+
+def themes_ambigus(texte: str) -> list[str]:
+    """Thèmes en concurrence dans un libellé comme « Sciences et espace » (sciences ET espace).
+
+    Vide si le texte n'évoque qu'un thème. Dans un texte court (6 mots ou moins), deux thèmes
+    différents sont toujours ambigus ; dans une phrase plus longue, seulement s'ils se touchent
+    (au plus 2 mots d'écart), pour ne pas gêner « Moyen Âge, avec un détour par la Cité de l'espace ».
+    """
+    toks, occ = _occurrences(texte)
+    canons = list(dict.fromkeys(c for _, _, c in occ))
+    if len(canons) < 2:
+        return []
+    if len(toks) <= 6:
+        return canons
+    amb: list[str] = []
+    for (_, b1, c1), (a2, _, c2) in zip(occ, occ[1:]):
+        if c1 != c2 and a2 - b1 <= 2:
+            for c in (c1, c2):
+                if c not in amb:
+                    amb.append(c)
+    return amb

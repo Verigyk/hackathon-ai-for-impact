@@ -5,6 +5,7 @@ import pytest
 
 os.environ["LIO_AUJOURDHUI"] = "2026-10-10"
 os.environ["LIO_GEOCODAGE_EN_LIGNE"] = "0"
+os.environ["LIO_DATATOURISME"] = "0"
 os.environ.pop("ANTHROPIC_API_KEY", None)
 
 SCENARIO = ("Je souhaite travailler avec ma classe de 5e sur le Moyen Âge. Nous sommes 42 élèves et "

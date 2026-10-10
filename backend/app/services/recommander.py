@@ -15,6 +15,11 @@ from .texte import normaliser
 MAX_CANDIDATS = 10
 
 
+def _decouverte(site) -> bool:
+    """Site importé de DATAtourisme (id préfixé « dt- ») : classé après le catalogue fait main."""
+    return str(site["id"]).startswith("dt-")
+
+
 def _souhaites(demande: schemas.Demande, tous: list[sqlite3.Row]) -> tuple[list[str], bool]:
     """Sites correspondant à la destination souhaitée (site précis d'abord, puis sa commune)."""
     if not demande.destination_souhaitee:
@@ -42,7 +47,8 @@ def recommander(conn: sqlite3.Connection, demande: schemas.Demande) -> schemas.R
 
     notes = {s["id"]: sites.adequation(s, demande) for s in possibles}
     seuil = 2 if demande.theme else 1
-    pre = sorted(possibles, key=lambda s: (s["id"] not in souhaites, -notes[s["id"]][0], -s["richesse"]))
+    pre = sorted(possibles, key=lambda s: (s["id"] not in souhaites, -notes[s["id"]][0], _decouverte(s),
+                                         -s["richesse"]))
     candidats = [s for s in pre if s["id"] in souhaites or notes[s["id"]][0] >= seuil]
     if len(candidats) < 3:
         candidats += [s for s in pre if s not in candidats][: 3 - len(candidats)]
@@ -88,6 +94,7 @@ def recommander(conn: sqlite3.Connection, demande: schemas.Demande) -> schemas.R
             souhaites.index(sid) if sid in souhaites else len(souhaites),
             choix_llm.index(sid) if sid in choix_llm else len(choix_llm),
             -sites.adequation(r.site, demande)[0],
+            _decouverte(r.site),
             r.niveau == "rouge",
             -r.site["richesse"],
             -r.indice,

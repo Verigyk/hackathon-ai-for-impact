@@ -31,6 +31,9 @@ const TITRES_TCHOUETTE: Record<HumeurTchouette, string> = {
   parle: 'Tchouette vous répond',
   joie: 'Tchouette se réjouit : votre demande est complète',
   inquiete: 'Tchouette s’inquiète : un souci est survenu',
+  pointe: 'Tchouette vous montre quelque chose',
+  loupe: 'Tchouette examine les données',
+  celebre: 'Tchouette fait la fête : votre demande est complète',
 }
 
 const libelle = (champ: string) => LIBELLES_MANQUANTS[champ] ?? champ

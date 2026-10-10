@@ -13,6 +13,9 @@ import json
 import logging
 import os
 import re
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Literal, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -20,6 +23,10 @@ from pydantic import BaseModel
 log = logging.getLogger("lio.llm")
 
 MODELE = os.environ.get("LIO_LLM_MODEL", "claude-opus-5-5")
+# Scène Tchouette : modèle rapide et économique, délai court (au-delà, repli démo pour ce tour).
+MODELE_SCENE = os.environ.get("LIO_LLM_MODEL_SCENE", "claude-sonnet-5-5")
+DELAI_SCENE_S = float(os.environ.get("LIO_LLM_DELAI_SCENE", "8"))
+MAX_APPELS_PAR_TOUR = 2
 T = TypeVar("T", bound=BaseModel)
 
 _client = None
@@ -41,7 +48,8 @@ def _get_client():
 
 def _appeler(systeme: str, contenu: str, format_sortie: type[T], max_tokens: int = 4000) -> T | None:
     """Un appel structuré (sortie JSON validée par Pydantic). None en cas d'échec ou de refus."""
-    if mode() != "llm":
+    if mode() != "llm" or _tour_scene.get() is not None:
+        # Pendant un tour de scène, seuls les 2 appels rapides de la scène sont permis.
         return None
     try:
         import anthropic
@@ -75,6 +83,106 @@ def _appeler(systeme: str, contenu: str, format_sortie: type[T], max_tokens: int
         log.warning("Requête déclinée par le LLM, repli démo.")
         return None
     return reponse.parsed_output
+
+
+# --- Scène : appels rapides et comptés -----------------------------------------------------------
+
+_tour_scene: ContextVar[dict | None] = ContextVar("tour_scene", default=None)
+
+
+@contextmanager
+def tour_de_scene():
+    """Encadre un tour de la scène : au plus MAX_APPELS_PAR_TOUR appels, bilan discret dans les logs.
+
+    Pendant le tour, les appels « classiques » (recommander, expliquer, extraire_demande) sont coupés :
+    la scène reste sur ses règles déterministes et ne paie que comprendre + reformuler.
+    """
+    bilan = {"appels": 0, "ms": 0, "entree": 0, "sortie": 0, "cache_lu": 0, "cache_ecrit": 0}
+    jeton = _tour_scene.set(bilan)
+    try:
+        yield bilan
+    finally:
+        _tour_scene.reset(jeton)
+        if bilan["appels"]:
+            log.info("Scène : %d appel(s) LLM, %d ms, jetons entrée %d (cache lu %d, écrit %d), sortie %d",
+                     bilan["appels"], bilan["ms"], bilan["entree"], bilan["cache_lu"],
+                     bilan["cache_ecrit"], bilan["sortie"])
+
+
+def appel_scene(etiquette: str, systeme: str, contenu: str, format_sortie: type[T],
+                max_tokens: int = 2000) -> T | None:
+    """Appel structuré rapide pour la scène (Sonnet, effort bas, délai court, aucun nouvel essai).
+
+    None en mode démo, au-delà du quota du tour, sur erreur réseau, délai dépassé, refus ou sortie
+    inutilisable : le moteur garde alors son comportement scripté pour ce tour.
+    """
+    if mode() != "llm":
+        return None
+    bilan = _tour_scene.get()
+    if bilan is not None and bilan["appels"] >= MAX_APPELS_PAR_TOUR:
+        log.info("Scène : quota de %d appels atteint, « %s » ignoré.", MAX_APPELS_PAR_TOUR, etiquette)
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    debut = time.monotonic()
+    if bilan is not None:
+        bilan["appels"] += 1
+    try:
+        reponse = _get_client().with_options(timeout=DELAI_SCENE_S, max_retries=0).beta.messages.parse(
+            model=MODELE_SCENE,
+            max_tokens=max_tokens,
+            # Prompt système figé (aucune donnée variable) : préfixe stable, mis en cache.
+            system=[{"type": "text", "text": systeme, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": contenu}],
+            output_format=format_sortie,
+            output_config={"effort": "low"},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+        )
+    except anthropic.APITimeoutError:
+        log.warning("Scène/%s : délai de %.0f s dépassé, repli démo.", etiquette, DELAI_SCENE_S)
+        return None
+    except anthropic.APIConnectionError as e:
+        log.warning("Scène/%s : LLM injoignable, repli démo : %s", etiquette, e)
+        return None
+    except anthropic.RateLimitError:
+        log.warning("Scène/%s : LLM limité en débit, repli démo.", etiquette)
+        return None
+    except anthropic.APIStatusError as e:
+        log.warning("Scène/%s : erreur API (%s), repli démo.", etiquette, e.status_code)
+        return None
+    except Exception as e:  # sortie non conforme au schéma, etc.
+        log.warning("Scène/%s : réponse inutilisable, repli démo : %s", etiquette, e)
+        return None
+    finally:
+        ms = int((time.monotonic() - debut) * 1000)
+        if bilan is not None:
+            bilan["ms"] += ms
+    _compter_jetons(etiquette, reponse, ms, bilan)
+    if reponse.stop_reason == "refusal":
+        details = getattr(reponse, "stop_details", None)
+        log.warning("Scène/%s : requête déclinée (%s), repli démo.", etiquette,
+                    getattr(details, "category", None))
+        return None
+    if reponse.stop_reason == "max_tokens":
+        log.warning("Scène/%s : réponse tronquée, repli démo.", etiquette)
+        return None
+    return getattr(reponse, "parsed_output", None)
+
+
+def _compter_jetons(etiquette: str, reponse, ms: int, bilan: dict | None) -> None:
+    u = getattr(reponse, "usage", None)
+    vals = {k: int(getattr(u, k, 0) or 0) for k in
+            ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
+    if bilan is not None:
+        bilan["entree"] += vals["input_tokens"]
+        bilan["sortie"] += vals["output_tokens"]
+        bilan["cache_lu"] += vals["cache_read_input_tokens"]
+        bilan["cache_ecrit"] += vals["cache_creation_input_tokens"]
+    log.debug("Scène/%s : %d ms, entrée %d, sortie %d, cache lu %d", etiquette, ms,
+              vals["input_tokens"], vals["output_tokens"], vals["cache_read_input_tokens"])
 
 
 # --- 1. Comprendre -----------------------------------------------------------------------------

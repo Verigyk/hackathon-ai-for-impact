@@ -37,6 +37,9 @@ const ETATS: Record<HumeurTchouette, { texte: string; pastille: string }> = {
   parle: { texte: 'Je vous réponds', pastille: 'status status-info' },
   joie: { texte: 'Demande complète', pastille: 'status status-success' },
   inquiete: { texte: 'Un souci de connexion', pastille: 'status status-error' },
+  pointe: { texte: 'Je vous réponds', pastille: 'status status-info' },
+  loupe: { texte: 'Je réfléchis…', pastille: 'status status-warning motion-safe:animate-pulse' },
+  celebre: { texte: 'Demande complète', pastille: 'status status-success' },
 }
 
 /** Classes complètes de chaque puce : elles apparaissent l'une après l'autre. */

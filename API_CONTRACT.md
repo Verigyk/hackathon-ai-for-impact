@@ -145,3 +145,108 @@ interface Sondage {
 | `POST /api/sondages/{code}/votes` | `{ site_id: string, votant_id: string }` | `Sondage` | Vote ou change de vote ; 409 `{detail}` si le vote est fermé, 422 si `site_id` n'est pas dans le vote |
 | `POST /api/sondages/{code}/fermer` | — | `Sondage` | Ferme le vote et désigne le gagnant |
 | `GET /api/reseau` | — | `{ ip_locale: string \| null }` | Adresse IP de la machine sur le réseau local, pour fabriquer l'URL du QR code quand le site est ouvert sur `localhost` |
+
+## Scène « Tchouette est l'interface » (v3)
+
+Une seule route pilote tout le parcours conversationnel : `POST /api/scene`. Le back est une **machine à états** (les étapes ne sautent jamais) ; le front est **sans logique métier** : il envoie un événement, reçoit la réplique, les cartes, l'humeur et la position de Tchouette, et les affiche. L'état est **renvoyé par le front à chaque tour** (le back ne garde pas de session) : `etat` est opaque pour l'UI, qui le stocke tel quel (sessionStorage) et le renvoie.
+
+```ts
+type Etape =
+  | "accueil"      // scène 1 : bienvenue, 3 portes d'entrée
+  | "theme"        // scène 2a : choix du thème par grandes cartes
+  | "criteres"     // scène 2b : un critère à la fois (classe, effectif, date, lieu, horaires)
+  | "destination"  // scène 3a : UNE destination à la fois
+  | "trajet"       // scène 3b : le meilleur trajet pour la date demandée
+  | "vote"         // scène 4 : vote de la classe (QR code)
+  | "prereservation" // scène 5
+  | "fin";
+
+type HumeurScene = "repos" | "reflexion" | "parle" | "joie" | "inquiete" | "salue" | "pointe" | "loupe" | "celebre";
+type AncreScene = "centre" | "gauche" | "droite" | "haut-droite" | "bas-droite";
+
+interface EtatScene {
+  etape: Etape;
+  demande: Demande;                  // critères recueillis (type existant)
+  candidats: string[];               // site_id proposés, dans l'ordre
+  rang: number;                      // index du candidat présenté (0-based)
+  site_id: string | null;            // destination acceptée
+  proposition_id: string | null;     // trajet accepté
+  vote_code: string | null;
+  dossier_reference: string | null;
+  carnet: Replique[];                // 30 dernières répliques (carnet de voyage)
+  tours: number;
+}
+
+interface Replique { qui: "tchouette" | "enseignant"; texte: string }
+
+type EvenementScene =
+  | { type: "demarrer" }
+  | { type: "texte"; texte: string }                       // saisie écrite ou voix
+  | { type: "choix"; id: string }                          // clic sur une carte
+  | { type: "valeur"; champ: "effectif" | "date" | "lieu_depart"; valeur: Record<string, string | number> }
+  | { type: "retour" }                                     // revenir à l'étape précédente
+  | { type: "vote_termine"; site_id: string }              // la classe a voté (le front a clos le sondage)
+  | { type: "prereservation_faite"; reference: string };   // le front a appelé POST /api/pre-reservations
+
+// Icônes : jeu FERMÉ de clés, le front les associe à des icônes lucide-react.
+type IconeScene = "chateau" | "os" | "colonnes" | "planete" | "feuille" | "palette" | "ampoule" | "pin"
+  | "etincelles" | "train" | "qr" | "coeur" | "oui" | "non" | "retour" | "loupe" | "calendrier" | "groupe";
+
+interface CarteScene {
+  id: string;                        // renvoyé tel quel dans { type: "choix", id }
+  titre: string;                     // 1 à 4 mots
+  sous_titre?: string;               // une ligne
+  icone?: IconeScene;
+  style?: "primaire" | "neutre";     // une seule carte primaire (action dominante) par réplique
+}
+
+type Saisie =
+  | null
+  | { type: "effectif"; min: 6; max: 50; eleves?: number; accompagnateurs?: number }
+  | { type: "date"; min: string; aide?: string }           // min = AAAA-MM-JJ ; aide : « 21 jours avant, de préférence »
+  | { type: "lieu"; suggestions: string[] };
+
+interface BadgeSource {
+  icone: "chart" | "database" | "shield" | "train" | "pin" | "euro" | "users" | "clock";
+  texte: string;                     // ex. « À l'heure 94 % »
+  source: "sncf" | "datatourisme" | "catalogue" | "calcul" | "demo";  // affichée en petit : « SNCF 2026 », « DATAtourisme »…
+}
+
+interface PuceCritere { cle: string; libelle: string; valeur: string }   // « Classe · 5e », « Voyageurs · 46 »
+
+interface DetailScene {              // « Pourquoi ce train ? » : affiché UNIQUEMENT à la demande
+  titre: string;
+  lignes: { libelle: string; valeur: string; niveau: Niveau | null }[];
+}
+
+interface ReponseScene {
+  etat: EtatScene;
+  etape: Etape;
+  replique: string;                  // UNE réplique, 25 mots au plus
+  humeur: HumeurScene;
+  ancre: AncreScene;                 // où se place Tchouette
+  cartes: CarteScene[];              // 0 à 4
+  saisie: Saisie;
+  badges: BadgeSource[];             // la donnée utilisée pour CETTE réplique (0 à 4)
+  puces: PuceCritere[];              // critères déjà recueillis
+  manquants: string[];               // libellés lisibles des critères restants
+  destination: Destination | null;   // renseignée aux étapes destination / trajet / vote / prereservation
+  proposition: Proposition | null;   // renseignée aux étapes trajet / vote / prereservation
+  detail: DetailScene | null;        // renseigné après le choix « pourquoi »
+  mode: "llm" | "demo";
+}
+```
+
+| Route | Corps | Réponse | Rôle |
+|---|---|---|---|
+| `POST /api/scene` | `{ etat: EtatScene \| null, evenement: EvenementScene }` | `ReponseScene` | Un tour de dialogue. `etat: null` + `demarrer` = nouvelle conversation |
+
+**Garanties du back** :
+- `texte` libre en mode `llm` : le modèle comprend et reformule, **jamais** il n'invente un horaire, une place, un lieu : il appelle des outils branchés sur les services existants. Mode `demo` (sans clé) : parseur à règles + réponses scriptées, le parcours doit s'achever sans LLM.
+- Une humeur et une ancre sont **toujours** renvoyées ; `replique` ≤ 25 mots, vouvoiement, jamais « réservé » ou « confirmé » avant la vraie confirmation.
+- `badges` ne contient que des chiffres réellement calculés. Les données de démonstration sont marquées `source: "demo"`.
+- Une destination dont l'indice est calculé à la **date demandée** (jamais le meilleur indice toutes dates confondues) ; un trajet bloqué (règle bloquante) n'est jamais présenté comme « meilleur » : Tchouette dit « pas assez fiable, voici pourquoi » et propose l'alternative.
+- Toute destination issue de DATAtourisme a un `site_id` préfixé `dt-` ; le front affiche alors l'étiquette « Découverte » (info à vérifier auprès du site).
+- Un événement impossible pour l'étape courante renvoie 409 `{detail}` en français.
+
+**Vote** : quand l'enseignant choisit « Faire voter la classe » (carte `vote`), le **back crée le sondage** (service `sondages`, avec les candidats de l'état) et renseigne `etat.vote_code`. Le front affiche alors QR code et course avec les routes « Vote en classe » existantes (`GET /api/sondages/{code}`), clôt avec `POST /api/sondages/{code}/fermer`, puis envoie `vote_termine` avec le `site_id` gagnant : la scène enchaîne sur le trajet de cette destination. **Pré-réservation** : le front appelle `POST /api/pre-reservations`, puis envoie `prereservation_faite`.

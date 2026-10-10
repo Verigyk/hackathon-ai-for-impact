@@ -50,6 +50,16 @@ def points_satisfaction(moyenne: float | None, nb: int, coeurs: int, simules: in
     return min(10, pts), txt + "."
 
 
+def _indice(details: list[schemas.CritereIndice], bloquant: bool) -> schemas.Indice:
+    """Somme des critères. Un trajet bloqué par une règle bloquante est rouge ET son score est
+    plafonné sous le seuil orange : jamais de « 84 » flatteur sur un trajet refusé (audit n°5)."""
+    score = sum(d.points for d in details)
+    niveau = niveau_score(score, bloquant)
+    if niveau == "rouge":
+        score = min(score, 59)
+    return schemas.Indice(score=score, niveau=niveau, details=details)
+
+
 def calculer(conn: sqlite3.Connection, f: Faits, echecs: set[str], adequation: tuple[int, str],
              satisfaction: tuple[float | None, int, int, int], cache: dict) -> schemas.Indice:
     details: list[schemas.CritereIndice] = []
@@ -145,8 +155,7 @@ def calculer(conn: sqlite3.Connection, f: Faits, echecs: set[str], adequation: t
     pts_sat, txt_sat = points_satisfaction(*satisfaction)
     details.append(schemas.CritereIndice(critere=SATISFACTION, points=pts_sat, max=10, explication=txt_sat))
 
-    score = sum(d.points for d in details)
-    return schemas.Indice(score=score, niveau=niveau_score(score, bool(echecs)), details=details)
+    return _indice(details, bool(echecs))
 
 
 def remplacer_satisfaction(indice: schemas.Indice, bloquant: bool,
@@ -155,5 +164,4 @@ def remplacer_satisfaction(indice: schemas.Indice, bloquant: bool,
     pts, txt = points_satisfaction(*satisfaction)
     details = [d.model_copy(update={"points": pts, "explication": txt}) if d.critere == SATISFACTION else d
                for d in indice.details]
-    score = sum(d.points for d in details)
-    return schemas.Indice(score=score, niveau=niveau_score(score, bloquant), details=details)
+    return _indice(details, bloquant)

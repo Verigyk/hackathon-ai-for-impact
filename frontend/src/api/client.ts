@@ -7,6 +7,9 @@ import type {
   ReponseRetour,
   ReponseTrajets,
   Reseau,
+  ReponseScene,
+  EtatScene,
+  EvenementScene,
   RetourExperience,
   Sante,
   Sondage,
@@ -91,4 +94,8 @@ export const api = {
   fermerSondage: (code: string) => poster<Sondage>(`/sondages/${encodeURIComponent(code)}/fermer`, {}),
 
   reseau: () => appeler<Reseau>('/reseau'),
+
+  // Scène : un tour de dialogue avec Tchouette (le back est une machine à états)
+  scene: (etat: EtatScene | null, evenement: EvenementScene) =>
+    poster<ReponseScene>('/scene', { etat, evenement }),
 }

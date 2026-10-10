@@ -43,7 +43,9 @@ def test_scenario_complet(client):
     c = dest["Carcassonne"]
     assert c["correspondances"] == 1
     assert c["acces_gare_site"]["mode"] == "urbain" and c["acces_gare_site"]["niveau"] == "orange"
-    assert c["niveau"] == "orange"
+    # Audit n°2 : le 12/11 le trajet de Carcassonne est bloqué (places) ; l'alternative d'un autre jour
+    # ne doit plus relever l'indice affiché de la destination.
+    assert c["niveau"] == "rouge" and c["indice_confiance"] <= 59
     assert dest["Albi"]["correspondances"] == 1
 
     # 5. Le premier train du matin est rouge (option d'un autre groupe), suivi de son alternative

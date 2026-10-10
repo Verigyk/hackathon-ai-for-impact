@@ -1,7 +1,7 @@
 """Contrat d'API en Pydantic : miroir champ pour champ de API_CONTRACT.md (snake_case)."""
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -261,3 +261,151 @@ class RequeteVote(Modele):
 
 class Reseau(Modele):
     ip_locale: Optional[str] = None
+
+
+# --- Scène « Tchouette est l'interface » (v3) ------------------------------------------------
+# Miroir de la section « Scène (v3) » de API_CONTRACT.md. Modèles stricts : un champ inconnu est
+# refusé (422) au lieu d'être ignoré en silence.
+
+Etape = Literal["accueil", "theme", "criteres", "destination", "trajet", "vote", "prereservation", "fin"]
+HumeurScene = Literal["repos", "reflexion", "parle", "joie", "inquiete", "salue", "pointe", "loupe", "celebre"]
+AncreScene = Literal["centre", "gauche", "droite", "haut-droite", "bas-droite"]
+IconeScene = Literal["chateau", "os", "colonnes", "planete", "feuille", "palette", "ampoule", "pin",
+                     "etincelles", "train", "qr", "coeur", "oui", "non", "retour", "loupe", "calendrier",
+                     "groupe"]
+
+
+class ModeleStrict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Replique(ModeleStrict):
+    qui: Literal["tchouette", "enseignant"]
+    texte: str
+
+
+class EtatScene(ModeleStrict):
+    etape: Etape
+    demande: Demande = Field(default_factory=Demande)
+    candidats: list[str] = Field(default_factory=list)
+    rang: int = 0
+    site_id: Optional[str] = None
+    proposition_id: Optional[str] = None
+    vote_code: Optional[str] = None
+    dossier_reference: Optional[str] = None
+    carnet: list[Replique] = Field(default_factory=list)
+    tours: int = 0
+
+
+class EvDemarrer(ModeleStrict):
+    type: Literal["demarrer"]
+
+
+class EvTexte(ModeleStrict):
+    type: Literal["texte"]
+    texte: str
+
+
+class EvChoix(ModeleStrict):
+    type: Literal["choix"]
+    id: str
+
+
+class EvValeur(ModeleStrict):
+    type: Literal["valeur"]
+    champ: Literal["effectif", "date", "lieu_depart"]
+    valeur: dict[str, str | int]
+
+
+class EvRetour(ModeleStrict):
+    type: Literal["retour"]
+
+
+class EvVoteTermine(ModeleStrict):
+    type: Literal["vote_termine"]
+    site_id: str
+
+
+class EvPrereservationFaite(ModeleStrict):
+    type: Literal["prereservation_faite"]
+    reference: str
+
+
+EvenementScene = Annotated[
+    Union[EvDemarrer, EvTexte, EvChoix, EvValeur, EvRetour, EvVoteTermine, EvPrereservationFaite],
+    Field(discriminator="type")]
+
+
+class RequeteScene(ModeleStrict):
+    etat: Optional[EtatScene] = None
+    evenement: EvenementScene
+
+
+class CarteScene(ModeleStrict):
+    id: str
+    titre: str
+    sous_titre: Optional[str] = None
+    icone: Optional[IconeScene] = None
+    style: Optional[Literal["primaire", "neutre"]] = None
+
+
+class SaisieEffectif(ModeleStrict):
+    type: Literal["effectif"] = "effectif"
+    min: Literal[6] = 6
+    max: Literal[50] = 50
+    eleves: Optional[int] = None
+    accompagnateurs: Optional[int] = None
+
+
+class SaisieDate(ModeleStrict):
+    type: Literal["date"] = "date"
+    min: str
+    aide: Optional[str] = None
+
+
+class SaisieLieu(ModeleStrict):
+    type: Literal["lieu"] = "lieu"
+    suggestions: list[str]
+
+
+Saisie = Annotated[Union[SaisieEffectif, SaisieDate, SaisieLieu], Field(discriminator="type")]
+
+
+class BadgeSource(ModeleStrict):
+    icone: Literal["chart", "database", "shield", "train", "pin", "euro", "users", "clock"]
+    texte: str
+    source: Literal["sncf", "datatourisme", "catalogue", "calcul", "demo"]
+
+
+class PuceCritere(ModeleStrict):
+    cle: str
+    libelle: str
+    valeur: str
+
+
+class LigneDetail(ModeleStrict):
+    libelle: str
+    valeur: str
+    niveau: Optional[Niveau] = None
+
+
+class DetailScene(ModeleStrict):
+    titre: str
+    lignes: list[LigneDetail]
+
+
+class ReponseScene(ModeleStrict):
+    etat: EtatScene
+    etape: Etape
+    replique: str
+    humeur: HumeurScene
+    ancre: AncreScene
+    cartes: list[CarteScene] = Field(default_factory=list, max_length=4)
+    saisie: Optional[Saisie] = None
+    badges: list[BadgeSource] = Field(default_factory=list, max_length=4)
+    puces: list[PuceCritere] = Field(default_factory=list)
+    manquants: list[str] = Field(default_factory=list)
+    destination: Optional[Destination] = None
+    proposition: Optional[Proposition] = None
+    detail: Optional[DetailScene] = None
+    mode: Literal["llm", "demo"]
