@@ -26,7 +26,7 @@ from datetime import date
 from pathlib import Path
 
 from app import config, db
-from . import commun, import_datatourisme
+from . import commun, import_datatourisme, import_sncf
 
 MOIS = ["janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet", "aout",
         "septembre", "octobre", "novembre", "decembre"]
@@ -41,7 +41,7 @@ def trouver_dossier() -> Path | None:
 
 
 def fichiers_sncf_disponibles() -> bool:
-    return trouver_dossier() is not None
+    return import_sncf.fichiers_disponibles() or trouver_dossier() is not None
 
 
 def _num_train(v: str) -> str:
@@ -120,7 +120,10 @@ def _trains_groupes(dossier: Path) -> set[str] | None:
 
 
 def construire(path: Path | None = None) -> None:
+    """Base « sncf » : fichiers bruts (xlsx, import_sncf) en priorité, sinon export CSV historique."""
     dossier = trouver_dossier()
+    if dossier is None and import_sncf.fichiers_disponibles():
+        return import_sncf.construire(path)
     if dossier is None:
         raise FileNotFoundError("Fichiers SNCF introuvables dans data/ : " + ", ".join(FICHIERS))
     path = path or config.db_path()

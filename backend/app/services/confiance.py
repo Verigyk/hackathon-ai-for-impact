@@ -87,12 +87,12 @@ def calculer(conn: sqlite3.Connection, f: Faits, echecs: set[str], adequation: t
         critere=CAPACITE, points=arrondi(base + pts_emp), max=20,
         explication=f"{f.besoin} places nécessaires, {dispo} disponibles ({etat}) ; {txt_emp}."))
 
-    # Régularité (15) : 0 à 80 %, 15 à 98 % ou plus
+    # Régularité (15) : 0 à 70 %, 15 à 95 % ou plus (médiane réelle par train : 86 %)
     regs = {n: r["taux_regularite"] for n, r in connus.items() if r["taux_regularite"] is not None}
     if regs:
         n_reg = min(regs, key=regs.get)
         reg = regs[n_reg]
-        pts = max(0.0, min(15.0, (reg - 80) / 18 * 15))
+        pts = max(0.0, min(15.0, (reg - 70) / 25 * 15))
         nb_mois = connus[n_reg]["nb_mois"]
         details.append(schemas.CritereIndice(
             critere=REGULARITE, points=arrondi(pts), max=15,
@@ -102,13 +102,13 @@ def calculer(conn: sqlite3.Connection, f: Faits, echecs: set[str], adequation: t
         details.append(schemas.CritereIndice(critere=REGULARITE, points=7, max=15,
                                              explication="Historique de régularité indisponible."))
 
-    # Risque de suppression (10) : 10 × (1 − taux / 5 %), minimum 0
+    # Risque de suppression (10) : 10 × (1 − taux / 15 %), minimum 0 (médiane réelle par train : 6 %)
     sups = {n: r["taux_suppression"] for n, r in connus.items() if r["taux_suppression"] is not None}
     if sups:
         n_sup = max(sups, key=sups.get)
         s = sups[n_sup]
         details.append(schemas.CritereIndice(
-            critere=SUPPRESSION, points=arrondi(max(0.0, 10 * (1 - s / 5))), max=10,
+            critere=SUPPRESSION, points=arrondi(max(0.0, 10 * (1 - s / 15))), max=10,
             explication=f"{pourcent_fr(s, 1)} de circulations supprimées (train {n_sup})."))
     else:
         details.append(schemas.CritereIndice(critere=SUPPRESSION, points=5, max=10,

@@ -30,16 +30,16 @@ def test_indice_de_l_alternative_du_scenario(conn, demande_scenario):
     assert [c.max for c in alt.indice.details] == [20, 15, 10, 15, 15, 15, 10]
     # 46 voyageurs pour 50 places : couvert tout juste (6) + 8 × 96 % d'emport
     assert d["Capacité et confort"].points == 14
-    # régularité 95,8 % : (95,8 − 80) / 18 × 15 = 13,2
-    assert d["Régularité"].points == 13
-    # suppressions 0,9 % : 10 × (1 − 0,9 / 5) = 8,2
-    assert d["Risque de suppression"].points == 8
+    # régularité 95,8 % : plafonnée à 15 (barème 70 % → 0, 95 % → 15)
+    assert d["Régularité"].points == 15
+    # suppressions 0,9 % : 10 × (1 − 0,9 / 15) = 9,4
+    assert d["Risque de suppression"].points == 9
     assert d["Faisabilité des horaires"].points == 15
     assert d["Accès gare → site"].points == 15
     assert d["Adéquation pédagogique"].points == 15
     assert d["Satisfaction et coup de cœur"].points == 5
     assert "pas encore de retours" in d["Satisfaction et coup de cœur"].explication
-    assert alt.indice.score == sum(c.points for c in alt.indice.details) == 85
+    assert alt.indice.score == sum(c.points for c in alt.indice.details) == 88
     assert alt.indice.niveau == "vert"
 
 
@@ -51,7 +51,7 @@ def test_formules_regularite_et_suppression(conn, demande_scenario, monkeypatch)
     r = propositions.planifier(conn, ctx, site)
     d = {c.critere: c.points for c in r.propositions[1].indice.details}
     assert d["Régularité"] == 15 and d["Risque de suppression"] == 10 and d["Capacité et confort"] == 14
-    conn.execute("UPDATE fiabilite_train SET taux_regularite = 79, taux_suppression = 6")
+    conn.execute("UPDATE fiabilite_train SET taux_regularite = 65, taux_suppression = 15")
     r = propositions.planifier(conn, propositions.contexte(demande_scenario), site)
     d = {c.critere: c.points for c in r.propositions[-1].indice.details}
     assert d["Régularité"] == 0 and d["Risque de suppression"] == 0

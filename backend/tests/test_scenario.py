@@ -6,7 +6,9 @@ MESSAGE_PRE = "Demande de pré-réservation transmise — confirmation en attent
 
 def test_scenario_complet(client):
     # 0. État de l'API : honnête sur les données et le mode
-    assert client.get("/api/sante").json() == {"ok": True, "mode": "demo", "donnees": "demo"}
+    sante = client.get("/api/sante").json()
+    assert (sante["ok"], sante["mode"], sante["donnees"]) == (True, "demo", "demo")
+    assert sante["source"] == "Démonstration" and sante["hypotheses"] == []
 
     # 1. Le prof décrit son projet : 7 champs extraits, gare de Foix trouvée seule, la date est demandée
     msgs = [{"role": "user", "content": SCENARIO}]
@@ -60,7 +62,7 @@ def test_scenario_complet(client):
     assert "Pas assez fiable" in rouge["explication_ia"]
     assert alt["est_alternative"] is True and alt["remplace"] == rouge["proposition_id"]
     assert alt["aller"]["segments"][0]["train"] == "871607"
-    assert alt["indice"]["niveau"] == "vert" and alt["indice"]["score"] == 85
+    assert alt["indice"]["niveau"] == "vert" and alt["indice"]["score"] == 88
     assert alt["jauge_aller"]["disponibles"] == 50
     assert all(p["date"] == "2026-11-12" for p in props)
 
@@ -109,7 +111,7 @@ def test_scenario_complet(client):
                                           "recommande": True, "commentaire": "Trajet simple, élèves ravis."})
     assert r.status_code == 200
     ret = r.json()
-    assert ret["ok"] is True and ret["indice_avant"] == 85 and ret["indice_apres"] == 90
+    assert ret["ok"] is True and ret["indice_avant"] == 88 and ret["indice_apres"] == 93
     r = client.post("/api/trajets", json={"demande": demande, "site_id": "toulouse-saint-sernin"}).json()
     sat = next(c for c in r["propositions"][0]["indice"]["details"] if c["critere"] == "Satisfaction et coup de cœur")
     assert sat["points"] == 10 and "pas encore de retours" not in sat["explication"]
