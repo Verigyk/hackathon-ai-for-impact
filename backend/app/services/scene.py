@@ -588,7 +588,7 @@ def _badges_destination(tour: Tour, plan: Plan) -> list[schemas.BadgeSource]:
     if doc is not None:
         source = "catalogue" if doc.source == "catalogue" else "datatourisme"
         libelle = "Fiche catalogue" if source == "catalogue" else "Fiche DATAtourisme"
-        badges.append(_badge("database", f"{libelle} : « {doc.passage[:140].rstrip()}… »", source))
+        badges.append(_badge("database", f"{libelle} : « {doc.passage[:90].rstrip()}… »", source))
     return badges
 
 

@@ -161,10 +161,11 @@ function SelectionCandidates({ reponse, chargement, envoyer, selection, onChange
   }
 
   const unique = n === 1
+  const plage = max === 2 ? 'les 2' : `2 à ${max}`
   const libelleBouton = unique ? 'Choisir cette destination' : 'Soumettre au vote de la classe'
   const aide =
     n === 0
-      ? `Cochez 1 destination pour la choisir, ou 2 à ${max} pour faire voter la classe.`
+      ? `Cochez 1 destination pour la choisir, ou ${plage} pour faire voter la classe.`
       : unique
         ? 'Une seule destination : on passe directement au trajet.'
         : 'Les élèves voteront entre ces destinations.'
@@ -176,8 +177,7 @@ function SelectionCandidates({ reponse, chargement, envoyer, selection, onChange
         Mes destinations candidates
       </legend>
       <p className="text-sm tabular-nums" id={`${groupeId}-aide`}>
-        <span className="font-extrabold">{n}</span> choisie{n > 1 ? 's' : ''} sur {max} possibles · 2 à {max} pour un
-        vote. {aide}
+        <span className="font-extrabold">{n}</span> choisie{n > 1 ? 's' : ''} sur {max} possibles. {aide}
       </p>
       <ul className="grid gap-2" aria-describedby={`${groupeId}-aide`}>
         {liste.map((d, i) => {
