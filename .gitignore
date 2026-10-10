@@ -1,0 +1,12 @@
+data/raw/
+data/processed/
+.env
+.env.local
+__pycache__/
+node_modules/
+.next/
+.python-deps/
+.venv/
+*.tsbuildinfo
+logs/
+outputs/
