@@ -57,6 +57,15 @@
     #app { flex-direction:column; }
     #side { width:100%; min-width:0; height:46%; border-right:0; border-bottom:1px solid var(--line); }
   }
+  label.check { display:flex; align-items:center; gap:6px; color:var(--fg); font-size:13px; margin-top:8px; cursor:pointer; }
+  .star-key { color:#c2410c; }
+  .site-ico { display:flex; align-items:center; justify-content:center; border-radius:50%; background:#c2410c; color:#fff;
+              border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.4); line-height:1; }
+  .site-pop h3 { margin:0 0 2px; font-size:14px; }
+  .site-pop .m { color:#667085; font-size:12px; }
+  .site-pop .tags { display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; }
+  .site-pop .tags span { background:#fff1e6; color:#9a3412; border-radius:10px; padding:1px 7px; font-size:11px; }
+  .site-pop a { color:var(--accent); cursor:pointer; }
 </style>
 </head>
 <body>
@@ -87,6 +96,8 @@
       <label for="axe">Axe</label>
       <select id="axe"><option value="">Tous les axes</option></select>
       <div id="count"></div>
+      <label class="check"><input type="checkbox" id="showLio" checked> Réseau de cars liO <span style="color:#667085;font-size:12px">(arrêts visibles en zoomant)</span></label>
+      <label class="check"><input type="checkbox" id="showSites" checked> Sites touristiques <span class="star-key">★</span></label>
     </div>
     <div id="detail"></div>
     <div id="list"></div>
@@ -101,6 +112,8 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="data.js"></script>
+<script src="sites.js" onerror="window.SITES=[]"></script>
+<script src="lio.js" onerror="window.LIO=null"></script>
 <script>
 const D = window.DATA;
 const DAY = 1440;
@@ -135,6 +148,59 @@ const stopLayer = L.layerGroup().addTo(map);
 const labelLayer = L.layerGroup().addTo(map);
 const trainPosLayer = L.layerGroup().addTo(map);
 const canvas = L.canvas({ padding: 0.3, tolerance: 6 });
+const siteLayer = L.layerGroup().addTo(map);
+
+// ---------- réseau liO (GTFS) : sous les trains ----------
+map.createPane('lio').style.zIndex = 350;
+const lioCanvas = L.canvas({ pane: 'lio', padding: 0.3, tolerance: 4 });
+const lioLayer = L.layerGroup(), lioStops = L.layerGroup();
+if (window.LIO) {
+  for (const [rid, shapes] of Object.entries(LIO.lines)) {
+    const [num, name, col, agency] = LIO.routes[rid];
+    const tip = `<b>liO ${num}</b><br>${name}<br><span style="color:#667085">${agency}</span>`;
+    shapes.forEach(sh => L.polyline(sh, { renderer: lioCanvas, pane: 'lio', color: col, weight: 2.5, opacity: 0.6, dashArray: '6 4' })
+      .bindTooltip(tip, { sticky: true }).addTo(lioLayer));
+  }
+  for (const [name, lat, lon, rids] of LIO.stops) {
+    const lignes = rids.map(r => LIO.routes[r]).filter(Boolean)
+      .map(r => `<span class="sw" style="display:inline-block;width:9px;height:9px;background:${r[2]}"></span> <b>${r[0]}</b> ${r[1]}`).join('<br>');
+    L.circleMarker([lat, lon], { renderer: lioCanvas, pane: 'lio', radius: 3, color: '#555', weight: 1, fillColor: '#ffe08a', fillOpacity: 1 })
+      .bindPopup(`<b>${name}</b><div style="font-size:12px;margin-top:4px">${lignes}</div>`, { maxWidth: 300 }).addTo(lioStops);
+  }
+  lioLayer.addTo(map);
+} else { $('showLio').closest('label').style.display = 'none'; }
+function syncLio() {
+  const on = $('showLio').checked;
+  on ? lioLayer.addTo(map) : lioLayer.remove();
+  on && map.getZoom() >= 12 ? lioStops.addTo(map) : lioStops.remove();
+}
+map.on('zoomend', syncLio);
+$('showLio').addEventListener('change', syncLio);
+
+// ---------- sites touristiques ----------
+function kmBetween(a1, o1, a2, o2) {
+  const r = Math.PI / 180, x = (o2 - o1) * r * Math.cos((a1 + a2) / 2 * r), y = (a2 - a1) * r;
+  return Math.hypot(x, y) * 6371;
+}
+const maxVis = Math.max(1, ...(window.SITES || []).map(s => s.total_visites || 0));
+(window.SITES || []).forEach(site => {
+  let best = -1, bd = Infinity;
+  D.stops.forEach((st, i) => { const d = kmBetween(site.latitude, site.longitude, st[1], st[2]); if (d < bd) { bd = d; best = i; } });
+  const size = Math.round(16 + 16 * Math.sqrt((site.total_visites || 0) / maxVis));
+  const icon = L.divIcon({ className: '', iconSize: [size, size],
+    html: `<div class="site-ico" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.6)}px">★</div>` });
+  const tags = (site.mots_cles || []).map(k => `<span>${k}</span>`).join('');
+  const pop = `<div class="site-pop"><h3>${site.site}</h3>
+    <div class="m">${site.adresse || site.commune || ''}</div>
+    ${site.total_visites ? `<div style="margin-top:4px"><b>${site.total_visites.toLocaleString('fr-FR')}</b> visites (2021)</div>` : ''}
+    <div class="tags">${tags}</div>
+    ${best >= 0 ? `<div>Gare la plus proche : <a data-stop="${best}">${D.stops[best][0]}</a> (${bd.toFixed(1)} km)</div>` : ''}</div>`;
+  L.marker([site.latitude, site.longitude], { icon, zIndexOffset: 1000, title: site.site })
+    .bindPopup(pop, { maxWidth: 280 }).addTo(siteLayer);
+});
+map.on('popupopen', e => e.popup.getElement().querySelectorAll('a[data-stop]').forEach(a =>
+  a.addEventListener('click', () => { const i = +a.dataset.stop; showStop(i); map.setView([D.stops[i][1], D.stops[i][2]], Math.max(map.getZoom(), 11)); })));
+$('showSites').addEventListener('change', e => e.target.checked ? siteLayer.addTo(map) : siteLayer.remove());
 
 function segPath(a, b) {
   const p = D.paths[a + '-' + b]; if (p) return p;
